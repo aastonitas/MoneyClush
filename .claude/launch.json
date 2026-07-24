@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "terminal-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["dashboard/server.py"],
+      "port": 8642
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=MoneyClush Terminal — Polymarket research dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moneyclush
+Group=moneyclush
+WorkingDirectory=/opt/moneyclush
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=-/opt/moneyclush/.env
+ExecStart=/opt/moneyclush/.venv/bin/python -m uvicorn dashboard.server:app \
+    --host 127.0.0.1 --port 8642 --log-level warning
+Restart=always
+RestartSec=5
+
+# The dashboard only reads public market data and writes its own metrics.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/moneyclush/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

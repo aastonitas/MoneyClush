@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MONEYCLUSH//TERMINAL</title>
+<style>
+  :root {
+    --bg: #070b09;
+    --panel: #0a100d;
+    --border: #16261d;
+    --green: #00ff88;
+    --green-dim: #00b35f;
+    --amber: #ffb000;
+    --red: #ff4455;
+    --cyan: #3bc9db;
+    --text: #b8c9c0;
+    --text-dim: #5a6e63;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    min-height: 100vh;
+    padding: 8px;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    margin-bottom: 8px;
+  }
+  .logo { font-size: 15px; font-weight: 700; color: var(--green); letter-spacing: 1px; }
+  .logo span { color: var(--text); }
+  .hstat { color: var(--text-dim); }
+  .hstat b { color: var(--green); font-weight: 600; }
+  .hstat b.amber { color: var(--amber); }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); margin-right: 5px;
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  .spacer { flex: 1; }
+  .mode-chip {
+    border: 1px solid var(--amber); color: var(--amber);
+    padding: 2px 8px; font-size: 10px; letter-spacing: 1px;
+  }
+
+  /* ---------- layout ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: 250px 1fr 1.15fr 1fr;
+    gap: 8px;
+    align-items: start;
+  }
+  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  @media (max-width: 1200px) { .grid { grid-template-columns: 250px 1fr 1fr; } .col-3 { display: contents; } }
+  @media (max-width: 900px)  { .grid { grid-template-columns: 1fr; } .col { display: flex; } .col-3 { display: flex; } }
+
+  .panel { border: 1px solid var(--border); background: var(--panel); }
+  .panel-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px; letter-spacing: 1px;
+  }
+  .panel-head .t { color: var(--text); font-weight: 600; }
+  .panel-head .slash { color: var(--green); font-weight: 700; }
+  .badge {
+    margin-left: auto; font-size: 9px; padding: 1px 6px;
+    border: 1px solid var(--green-dim); color: var(--green); white-space: nowrap;
+  }
+  .badge.amber { border-color: var(--amber); color: var(--amber); }
+  .panel-body { padding: 8px 10px; overflow-x: auto; }
+
+  /* ---------- info icon + tooltip ---------- */
+  .info {
+    cursor: pointer; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 50%;
+    width: 15px; height: 15px; display: inline-flex;
+    align-items: center; justify-content: center;
+    font-size: 10px; font-style: normal; flex: 0 0 auto;
+    user-select: none;
+  }
+  .info:hover { color: var(--cyan); border-color: var(--cyan); }
+  #tooltip {
+    position: fixed; z-index: 99; max-width: 300px;
+    background: #0d1512; border: 1px solid var(--cyan);
+    color: var(--text); padding: 10px 12px; font-size: 11px;
+    line-height: 1.5; display: none;
+    box-shadow: 0 4px 24px rgba(0,0,0,.6);
+  }
+  #tooltip b { color: var(--cyan); display: block; margin-bottom: 4px; }
+
+  /* ---------- sidebar ---------- */
+  .tip {
+    border-left: 2px solid var(--border);
+    padding: 6px 8px; margin-bottom: 8px;
+    font-size: 11px; line-height: 1.45; color: var(--text);
+  }
+  .tip .ic { margin-right: 6px; font-weight: 700; }
+  .tip.action { border-left-color: var(--green); }
+  .tip.action .ic { color: var(--green); }
+  .tip.warn { border-left-color: var(--amber); }
+  .tip.warn .ic { color: var(--amber); }
+  .tip.ok { border-left-color: var(--cyan); }
+  .tip.ok .ic { color: var(--cyan); }
+  .tip.next { border-left-color: var(--text-dim); color: var(--text-dim); }
+
+  .alert-row {
+    display: flex; gap: 8px; padding: 4px 0;
+    border-bottom: 1px solid rgba(22,38,29,.5);
+    font-size: 10.5px; line-height: 1.4;
+  }
+  .alert-time { color: var(--text-dim); flex: 0 0 auto; }
+  .alert-tag {
+    flex: 0 0 auto; font-size: 9px; padding: 0 5px;
+    font-weight: 700; align-self: flex-start; margin-top: 1px;
+  }
+  .tag-edge { background: rgba(0,255,136,.12); color: var(--green); }
+  .tag-fill { background: rgba(59,201,219,.12); color: var(--cyan); }
+  .tag-resolve { background: rgba(255,176,0,.12); color: var(--amber); }
+  .tag-warn { background: rgba(255,68,85,.12); color: var(--red); }
+  .tag-info { color: var(--text-dim); border: 1px solid var(--border); }
+
+  .sstat { display: flex; justify-content: space-between; padding: 3px 0; font-size: 11px; }
+  .sstat span:first-child { color: var(--text-dim); }
+
+  /* ---------- scanner rows ---------- */
+  .scan-row { border: 1px solid var(--border); padding: 8px; margin-bottom: 8px; }
+  .scan-row .rt { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .scan-row .mkt { color: var(--text); font-weight: 600; }
+  .edge-chip { font-size: 10px; padding: 1px 6px; font-weight: 700; }
+  .edge-pos { background: rgba(0,255,136,.12); color: var(--green); border: 1px solid var(--green-dim); }
+  .edge-watch { background: rgba(255,176,0,.10); color: var(--amber); border: 1px solid var(--amber); }
+  .edge-none { color: var(--text-dim); border: 1px solid var(--border); }
+  .scan-detail { color: var(--text-dim); font-size: 11px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .scan-detail b { color: var(--text); }
+
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; color: var(--text-dim); font-weight: 400;
+    font-size: 10px; padding: 3px 6px; border-bottom: 1px solid var(--border);
+    letter-spacing: .5px;
+  }
+  td { padding: 4px 6px; border-bottom: 1px solid rgba(22,38,29,.5); white-space: nowrap; }
+  .up { color: var(--green); }
+  .down { color: var(--red); }
+  .dim { color: var(--text-dim); }
+  .amber { color: var(--amber); }
+  .cyan { color: var(--cyan); }
+
+  .tbar { height: 3px; background: var(--border); margin-top: 3px; position: relative; }
+  .tbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green-dim); display: block; }
+
+  .pnl-big { font-size: 22px; font-weight: 700; }
+  canvas { width: 100%; height: 110px; display: block; }
+
+  .footer-note { color: var(--text-dim); font-size: 10px; margin-top: 8px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">MONEYCLUSH<span>//</span>TERMINAL</div>
+  <div class="hstat">BTC <b id="h-btc">—</b></div>
+  <div class="hstat">ETH <b id="h-eth">—</b></div>
+  <div class="hstat">SOL <b id="h-sol">—</b></div>
+  <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
+  <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
+  <div class="spacer"></div>
+  <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
+  <div class="mode-chip">PAPER MODE</div>
+  <div class="hstat" id="h-clock">--:--:--</div>
+</header>
+
+<div class="grid">
+
+  <!-- ============ SIDEBAR ============ -->
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">ADVISOR</span>
+        <i class="info" data-key="advisor">i</i>
+        <span class="badge">AUTO</span></div>
+      <div class="panel-body" id="advisor"><div class="dim">analizando…</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">ALERTAS</span>
+        <i class="info" data-key="alerts">i</i>
+        <span class="badge amber" id="alert-count">0</span></div>
+      <div class="panel-body" id="alerts" style="max-height:260px; overflow-y:auto"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">SESIÓN</span>
+        <i class="info" data-key="session">i</i></div>
+      <div class="panel-body">
+        <div class="sstat"><span>fills paper</span><b id="s-fills">0</b></div>
+        <div class="sstat"><span>resoluciones</span><b id="s-resolved">0</b></div>
+        <div class="sstat"><span>win rate</span><b id="s-winrate">—</b></div>
+        <div class="sstat"><span>errores datos</span><b id="s-errors" class="dim">0</b></div>
+        <div class="sstat"><span>σ BTC 1m</span><b id="s-sigma" class="cyan">—</b></div>
+        <div class="sstat"><span>dispersión fuentes</span><b id="s-disp">—</b></div>
+        <div class="sstat"><span>métricas</span><b class="dim">paper_metrics.jsonl</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ COL 1: SCANNER ============ -->
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">MISPRICING SCANNER</span>
+        <i class="info" data-key="scanner">i</i>
+        <span class="badge" id="scan-count">0 FOUND</span></div>
+      <div class="panel-body" id="scanner"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PAPER POSITIONS</span>
+        <i class="info" data-key="positions">i</i></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>MKT</th><th>UP</th><th>DOWN</th><th>INV</th></tr></thead>
+          <tbody id="positions"><tr><td colspan="4" class="dim">sin posiciones</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ COL 2: LIVE MARKETS + PNL ============ -->
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">LIVE MARKETS</span>
+        <i class="info" data-key="markets">i</i>
+        <span class="badge" id="mkt-count">WATCHING 0</span></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>MARKET</th><th>UP</th><th>DOWN</th><th>LIQ</th><th>T-REMAIN</th></tr></thead>
+          <tbody id="markets"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PNL CURVE</span>
+        <i class="info" data-key="pnl">i</i>
+        <span class="badge amber" id="pnl-badge">$0.00</span></div>
+      <div class="panel-body">
+        <div class="pnl-big" id="pnl-val">$0.00</div>
+        <canvas id="pnl-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ COL 3: DEPTH + TRADES ============ -->
+  <div class="col col-3">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">BTC DEPTH</span>
+        <i class="info" data-key="depth">i</i></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th></th><th>BID</th><th>ASK</th><th>FAIR</th><th>EDGE</th></tr></thead>
+          <tbody id="depth"></tbody>
+        </table>
+        <div class="scan-detail" style="margin-top:8px" id="pair-info"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">ARBITRAJE UP+DOWN</span>
+        <i class="info" data-key="arb">i</i>
+        <span class="badge" id="arb-count">0 VISTOS</span></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>TIME</th><th>MKT</th><th>PAR</th><th>¢/PAR</th><th>SRC</th></tr></thead>
+          <tbody id="arbs"><tr><td colspan="5" class="dim">ninguno detectado aún</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PAPER TRADE LOG</span>
+        <i class="info" data-key="trades">i</i>
+        <span class="badge">TEMPORAL ARB</span></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>TIME</th><th>MKT</th><th>SIDE</th><th>PRICE</th><th>SIZE</th></tr></thead>
+          <tbody id="trades"><tr><td colspan="5" class="dim">esperando señales…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer-note">
+  datos: gamma-api.polymarket.com + clob.polymarket.com + okx/coinbase spot &middot; refresh 3s &middot; ejecución simulada (paper) — sin órdenes reales
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (n, d=2) => n == null ? "—" : Number(n).toLocaleString("en-US", {minimumFractionDigits:d, maximumFractionDigits:d});
+const cents = p => p == null ? "—" : Math.round(p*100) + "¢";
+
+/* ---------------- info tooltips ---------------- */
+const INFO = {
+  advisor: ["ADVISOR", "Consejos generados por reglas sobre el estado actual: edges detectados, costes de par, liquidez baja, calidad del win rate y próximos pasos del proyecto. Se recalcula en cada poll (3s)."],
+  alerts: ["ALERTAS", "Feed de eventos clave: EDGE = mispricing detectado por el scanner · FILL = compra simulada de la estrategia · RSLV = ventana resuelta con su PnL · WARN = errores de datos. Máximo 50 eventos."],
+  session: ["SESIÓN", "Estadísticas acumuladas desde el arranque del servidor. Cada resolución se guarda en data/paper_metrics.jsonl con opening, spot final, ganador, costes medios y PnL — para validar la estrategia offline."],
+  scanner: ["MISPRICING SCANNER", "Compara el fair value del modelo contra el mejor ask real del CLOB. El edge es NETO: descuenta comisiones (1.2%), slippage (0.6%) y margen de seguridad (1%). z = distancia al opening dividida por la volatilidad restante — es la variable que realmente decide el precio. |z| alto = resultado casi definido. EDGE > 2% = operable, WATCH = positivo pero insuficiente."],
+  positions: ["PAPER POSITIONS", "Inventario simulado por mercado. UP/DOWN muestra shares y coste medio. Las shares emparejadas (mismo número de Up y Down) pagan $1 seguro al resolver; el exceso es exposición direccional. INV = capital invertido."],
+  markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
+  pnl: ["PNL CURVE", "PnL acumulado del paper trading. Solo cambia cuando una ventana se resuelve: cada posición paga $1 por share ganadora menos lo invertido. La curva plana significa que hay posiciones abiertas esperando resolución."],
+  depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
+  arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
+  trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
+};
+
+const tooltip = $("tooltip");
+document.addEventListener("click", e => {
+  const icon = e.target.closest(".info");
+  if (icon) {
+    const [title, body] = INFO[icon.dataset.key] || ["", ""];
+    tooltip.innerHTML = `<b>${title}</b>${body}`;
+    tooltip.style.display = "block";
+    const r = icon.getBoundingClientRect();
+    const tw = 300;
+    let left = Math.min(r.left, window.innerWidth - tw - 16);
+    tooltip.style.left = Math.max(8, left) + "px";
+    tooltip.style.top = (r.bottom + 8) + "px";
+    e.stopPropagation();
+  } else {
+    tooltip.style.display = "none";
+  }
+});
+
+/* ---------------- pnl curve ---------------- */
+function drawCurve(canvas, points) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width = canvas.offsetWidth * 2;
+  const h = canvas.height = 220;
+  ctx.clearRect(0,0,w,h);
+  if (points.length < 2) return;
+  const vals = points.map(p => p[1]);
+  const min = Math.min(...vals, 0), max = Math.max(...vals, 0.01);
+  const range = max - min || 1;
+  const x = i => (i/(points.length-1)) * (w-8) + 4;
+  const y = v => h - 8 - ((v-min)/range) * (h-16);
+
+  ctx.strokeStyle = "rgba(90,110,99,.4)"; ctx.lineWidth = 1;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(0, y(0)); ctx.lineTo(w, y(0)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const last = vals[vals.length-1];
+  const col = last >= 0 ? "0,255,136" : "255,68,85";
+  ctx.beginPath();
+  points.forEach((p,i) => i ? ctx.lineTo(x(i), y(p[1])) : ctx.moveTo(x(i), y(p[1])));
+  ctx.strokeStyle = `rgb(${col})`; ctx.lineWidth = 2; ctx.stroke();
+  ctx.lineTo(x(points.length-1), h); ctx.lineTo(x(0), h); ctx.closePath();
+  ctx.fillStyle = `rgba(${col},.08)`; ctx.fill();
+}
+
+const edgeClass = sig => sig === "EDGE" ? "edge-pos" : (sig === "WATCH" ? "edge-watch" : "edge-none");
+const hhmmss = ts => {
+  const d = new Date(ts);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2,"0")).join(":");
+};
+
+/* ---------------- refresh ---------------- */
+async function refresh() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+
+    $("h-btc").textContent = "$" + fmt(s.btc_price, 0);
+    $("h-eth").textContent = "$" + fmt(s.eth_price, 0);
+    $("h-sol").textContent = "$" + fmt(s.sol_price, 1);
+    $("h-polls").textContent = s.poll_count;
+    const wsEl = $("h-ws");
+    if (s.ws_connected) {
+      wsEl.textContent = (s.ws_updates_per_sec || 0).toFixed(0) + "/s";
+      wsEl.className = "up";
+    } else {
+      wsEl.textContent = "OFF";
+      wsEl.className = "down";
+    }
+    $("h-status").textContent = s.status === "live" ? "LIVE" : s.status.toUpperCase().slice(0,24);
+
+    // advisor
+    const adv = s.advisor || [];
+    $("advisor").innerHTML = adv.map(t =>
+      `<div class="tip ${t.kind}"><span class="ic">${t.icon}</span>${t.text}</div>`
+    ).join("") || '<div class="dim">analizando…</div>';
+
+    // alerts
+    const al = s.alerts || [];
+    $("alert-count").textContent = al.length;
+    $("alerts").innerHTML = al.map(a => {
+      const tag = {edge:"EDGE", fill:"FILL", resolve:"RSLV", warn:"WARN", info:"INFO"}[a.level] || "·";
+      return `<div class="alert-row">
+        <span class="alert-time">${hhmmss(a.ts)}</span>
+        <span class="alert-tag tag-${a.level}">${tag}</span>
+        <span>${a.text}</span></div>`;
+    }).join("") || '<div class="dim">sin eventos</div>';
+
+    // session stats
+    const st = s.stats || {};
+    $("s-fills").textContent = st.fills || 0;
+    $("s-resolved").textContent = st.resolved || 0;
+    $("s-winrate").textContent = st.resolved ? (st.win_rate*100).toFixed(0) + "%" : "—";
+    $("s-winrate").className = st.win_rate >= 0.5 ? "up" : (st.resolved ? "down" : "");
+    $("s-errors").textContent = s.errors || 0;
+    $("s-sigma").textContent = s.sigma_1m_bps != null ? s.sigma_1m_bps + " bps" : "—";
+    const disp = s.dispersion_bps;
+    $("s-disp").textContent = disp != null ? disp + " bps" : "—";
+    $("s-disp").className = disp == null ? "" : (disp > 20 ? "down" : "up");
+
+    // scanner
+    const sc = s.scanner || [];
+    $("scan-count").textContent = sc.filter(r => r.signal === "EDGE").length + " FOUND";
+    $("scanner").innerHTML = sc.map(r => `
+      <div class="scan-row">
+        <div class="rt">
+          <span class="mkt">${r.market} · ${r.side}</span>
+          <span class="edge-chip ${edgeClass(r.signal)}">${(r.edge*100).toFixed(2)}% ${r.signal}</span>
+        </div>
+        <div class="scan-detail">
+          <span>fair <b>${cents(r.fair)}</b></span>
+          <span>ask <b>${cents(r.ask)}</b></span>
+          <span>z <b>${r.z != null ? r.z.toFixed(2) : "—"}</b></span>
+          <span>dist <b>${r.dist_bps != null ? r.dist_bps.toFixed(1) : "—"}bps</b></span>
+        </div>
+      </div>`).join("") || '<div class="dim">escaneando…</div>';
+
+    // markets
+    const mk = s.markets || [];
+    $("mkt-count").textContent = "WATCHING " + mk.length;
+    $("markets").innerHTML = mk.map(m => {
+      const total = m.duration === "5m" ? 300 : 900;
+      const pct = Math.max(0, Math.min(100, (m.seconds_remaining/total)*100));
+      const mm = Math.floor(m.seconds_remaining/60), ss = String(m.seconds_remaining%60).padStart(2,"0");
+      return `<tr>
+        <td>${m.asset} <span class="dim">${m.duration}</span></td>
+        <td class="up">${cents(m.price_up)}</td>
+        <td class="down">${cents(m.price_down)}</td>
+        <td class="dim">$${fmt(m.liquidity/1000,1)}K</td>
+        <td><span class="cyan">${mm}:${ss}</span><div class="tbar"><i style="width:${pct}%"></i></div></td>
+      </tr>`;
+    }).join("");
+
+    // depth
+    const btc = mk.filter(m => m.asset === "BTC" && m.best_ask_up != null);
+    $("depth").innerHTML = btc.map(m => `
+      <tr><td class="dim">${m.duration} UP</td>
+        <td class="up">${cents(m.best_bid_up)}</td><td>${cents(m.best_ask_up)}</td>
+        <td class="amber">${cents(m.fair_up)}</td>
+        <td class="${m.net_edge_up > 0 ? "up" : "dim"}">${(m.net_edge_up*100).toFixed(1)}%</td></tr>
+      <tr><td class="dim">${m.duration} DN</td>
+        <td class="up">${cents(m.best_bid_down)}</td><td>${cents(m.best_ask_down)}</td>
+        <td class="amber">${cents(1 - m.fair_up)}</td>
+        <td class="${m.net_edge_down > 0 ? "up" : "dim"}">${(m.net_edge_down*100).toFixed(1)}%</td></tr>
+    `).join("") || '<tr><td colspan="5" class="dim">cargando libro…</td></tr>';
+
+    const b5 = btc.find(m => m.duration === "5m");
+    $("pair-info").innerHTML = b5 ? `
+      <span>dist vs open <b class="${b5.distance_bps >= 0 ? "up" : "down"}">${b5.distance_bps != null ? b5.distance_bps.toFixed(1) : "—"} bps</b></span>
+      <span>σ restante <b>${b5.sigma_rem_bps != null ? b5.sigma_rem_bps.toFixed(1) : "—"} bps</b></span>
+      <span>z <b class="cyan">${b5.z_score != null ? b5.z_score.toFixed(2) : "—"}</b></span>
+      <span>pair <b>${b5.pair_cost ? cents(b5.pair_cost) : "—"}</b></span>
+      <span>imbal <b>${(b5.book_imbalance*100).toFixed(0)}%</b></span>` : "";
+
+    // pnl
+    const pnl = s.paper_pnl || 0;
+    const ptxt = (pnl >= 0 ? "+$" : "-$") + fmt(Math.abs(pnl));
+    $("pnl-val").textContent = ptxt;
+    $("pnl-val").className = "pnl-big " + (pnl >= 0 ? "up" : "down");
+    $("pnl-badge").textContent = ptxt;
+    drawCurve($("pnl-canvas"), s.pnl_curve || []);
+
+    // positions
+    const pos = Object.entries(s.positions || {});
+    $("positions").innerHTML = pos.length ? pos.map(([cid,p]) => `
+      <tr><td class="dim">${p.market || cid.slice(0,8)}</td>
+        <td class="up">${fmt(p.up,0)} @ ${cents(p.avg_up)}</td>
+        <td class="down">${fmt(p.down,0)} @ ${cents(p.avg_down)}</td>
+        <td>$${fmt(p.invested)}</td></tr>`).join("")
+      : '<tr><td colspan="4" class="dim">sin posiciones</td></tr>';
+
+    // arbitrage
+    const arbs = s.arb_events || [];
+    $("arb-count").textContent = (s.stats?.arbs_seen || 0) + " VISTOS";
+    $("arbs").innerHTML = arbs.length ? arbs.map(a => `
+      <tr><td class="dim">${hhmmss(a.ts)}</td><td>${a.market}</td>
+        <td class="amber">${cents(a.pair_cost)}</td>
+        <td class="up">+${(a.profit_per_pair*100).toFixed(2)}¢</td>
+        <td class="dim">${a.source}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="dim">ninguno detectado aún</td></tr>';
+
+    // trades
+    const tr = s.paper_trades || [];
+    $("trades").innerHTML = tr.length ? tr.map(t => `
+      <tr><td class="dim">${hhmmss(t.ts)}</td><td>${t.market}</td>
+        <td class="${t.side === "Up" ? "up" : "down"}">${t.side.toUpperCase()}</td>
+        <td>${cents(t.price)}</td><td>${fmt(t.size,0)}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="dim">esperando señales…</td></tr>';
+
+  } catch (e) {
+    $("h-status").textContent = "OFFLINE";
+  }
+}
+
+setInterval(() => { $("h-clock").textContent = new Date().toLocaleTimeString("es-ES"); }, 1000);
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
