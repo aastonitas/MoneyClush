@@ -41,6 +41,7 @@ from moneyclush.data.sports import fetch_todays_matches, to_rows
 from moneyclush.data.trending import fetch_trending
 from moneyclush.data.trending import to_rows as trending_to_rows
 from moneyclush.data.opening_prices import OpeningPriceCache
+from moneyclush import notify as push
 from moneyclush.data.models import (
     MarketInfo,
     MarketState,
@@ -159,6 +160,13 @@ MAX_PICK_PRICE = 0.97
 STANDINGS_TTL = 1800.0
 STANDINGS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
+alerted_arbs: set[str] = set()              # dedupe: push once per window, not once per 3s poll
+alerted_favourites: set[str] = set()        # dedupe: one push per sports fixture
+
+# Below this, a sports favourite is not remarkable enough to interrupt
+# someone for — 70-90% is exactly the band the BTC backtest found the
+# market itself gets wrong most often.
+FAV_PUSH_THRESHOLD = 0.75
 
 
 def _as_float(value) -> float | None:
@@ -197,6 +205,30 @@ def add_alert(level: str, text: str) -> None:
         "text": text,
     })
     STATE["alerts"] = STATE["alerts"][:50]
+
+
+def notify_push(title: str, body: str, tag: str | None = None, url: str | None = None) -> None:
+    """Fire a Web Push to every subscribed browser, without blocking the poll.
+
+    Reserved for the handful of things worth interrupting someone for:
+    risk-free arbitrage, a net BTC edge, storage falling back to
+    ephemeral, and a sports favourite crossing the alert threshold.
+    Everything else stays in the in-app alert feed, which nobody has to
+    be looking at to eventually see.
+
+    `webpush()` is a blocking HTTP call; running it inline on the poll
+    loop would stall every market's pricing for however long the push
+    services take to answer, so it goes to a worker thread instead.
+    """
+    async def _send():
+        try:
+            delivered = await asyncio.to_thread(push.send_to_all, title, body, tag, url)
+            if delivered:
+                log.info("notify.sent", title=title, delivered=delivered)
+        except Exception as exc:
+            log.warning("notify.dispatch_failed", error=str(exc)[:160])
+
+    asyncio.create_task(_send())
 
 
 def persist_metric(record: dict) -> None:
@@ -606,6 +638,16 @@ async def poll_loop() -> None:
                                     f"ARB BTC {mk.duration}: par a {pair*100:.1f}¢ "
                                     f"→ {profit*100:.2f}¢/par libre de riesgo",
                                 )
+                                # The condition can hold for several polls in a
+                                # row; a push per 3s tick would be unusable.
+                                if mk.slug not in alerted_arbs:
+                                    alerted_arbs.add(mk.slug)
+                                    notify_push(
+                                        "Arbitraje libre de riesgo",
+                                        f"BTC {mk.duration}: par a {pair*100:.1f}¢ → "
+                                        f"{profit*100:.2f}¢/par sin riesgo direccional",
+                                        tag=f"arb-{mk.slug}",
+                                    )
 
                             best_edge = max(fv.net_edge_up, fv.net_edge_down)
                             edge_side = "UP" if fv.net_edge_up >= fv.net_edge_down else "DOWN"
@@ -633,6 +675,12 @@ async def poll_loop() -> None:
                                     "edge",
                                     f"EDGE {best_edge*100:.1f}% · BTC {mk.duration} {edge_side} "
                                     f"(fair vs ask)",
+                                )
+                                notify_push(
+                                    "Edge neto en BTC",
+                                    f"{best_edge*100:.1f}% neto · BTC {mk.duration} {edge_side} "
+                                    f"(fair vs ask, tras costes)",
+                                    tag=f"edge-{edge_key}",
                                 )
 
                             # -------- paper trading (temporal arbitrage)
@@ -796,7 +844,7 @@ async def poll_loop() -> None:
                         "cum_pnl": round(STATE["paper_pnl"], 4),
                     })
 
-                # drop edge dedupe keys for windows that already closed
+                # drop edge/arb dedupe keys for windows that already closed
                 for key in list(alerted_edges):
                     slug = key.rsplit(":", 1)[0]
                     try:
@@ -806,6 +854,14 @@ async def poll_loop() -> None:
                     dur = 900 if "15m" in slug else 300
                     if now_s > window_start + dur + 60:
                         alerted_edges.discard(key)
+                for slug in list(alerted_arbs):
+                    try:
+                        window_start = int(slug.rsplit("-", 1)[1])
+                    except ValueError:
+                        continue
+                    dur = 900 if "15m" in slug else 300
+                    if now_s > window_start + dur + 60:
+                        alerted_arbs.discard(slug)
 
                 STATE["pnl_curve"].append([now_ms, round(STATE["paper_pnl"], 2)])
                 STATE["pnl_curve"] = STATE["pnl_curve"][-600:]
@@ -863,6 +919,12 @@ async def prediction_loop() -> None:
     PREDICTIONS.load()
     log.info("predictions.loaded", total=len(PREDICTIONS.predictions))
 
+    # The first tick after every restart would otherwise fire one push per
+    # fixture already sitting above the threshold — every UFC card and
+    # every esports BO3 already 80%+ in, all at once. Seeding without
+    # pushing means only *new* crossings notify, which is the entire point.
+    seeded_favourites = False
+
     while True:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -879,6 +941,35 @@ async def prediction_loop() -> None:
                     f"{settled} predicción(es) resueltas · "
                     f"{stats['wins']}/{stats['resolved']} · {stats['verdict']}",
                 )
+
+            # A strong favourite is the live, cross-sport version of the
+            # question the whole project exists to answer. Alerted once per
+            # fixture — not once per tick — and only while it is still
+            # something to act on, not after the market has already called it.
+            live_ids: set[str] = set()
+            for match in matches:
+                live_ids.add(match.event_id)
+                if match.decided or match.event_id in alerted_favourites:
+                    continue
+                favourite = match.favourite()
+                if favourite is None:
+                    continue
+                outcome, prob = favourite
+                if prob < FAV_PUSH_THRESHOLD:
+                    continue
+                alerted_favourites.add(match.event_id)
+                if not seeded_favourites:
+                    continue
+                notify_push(
+                    "Favorito fuerte",
+                    f"{match.title[:70]} — {outcome.label} al {prob*100:.0f}%",
+                    tag=f"fav-{match.event_id}",
+                    url=match.url,
+                )
+            seeded_favourites = True
+            # A fixture that dropped out of the feed has ended; forgetting it
+            # is what keeps this set from growing forever.
+            alerted_favourites.intersection_update(live_ids)
         except Exception as exc:
             log.warning("predictions.loop_failed", error=str(exc)[:120])
 
@@ -906,6 +997,14 @@ async def startup() -> None:
 
     if status["state"] == "ephemeral":
         add_alert("warn", f"Almacenamiento efímero — {status['reason']}")
+        # Silent data loss: nothing else in this project fails loudly
+        # enough to justify a push, but losing weeks of the sample the
+        # whole project exists to accumulate does.
+        notify_push(
+            "MoneyClush: almacenamiento efímero",
+            status["reason"],
+            tag="storage-ephemeral",
+        )
     elif status["state"] == "unproven":
         add_alert("info", f"Persistencia sin verificar — {status['reason']}")
     else:
@@ -1115,6 +1214,39 @@ async def get_standings() -> JSONResponse:
         return JSONResponse(
             {"leagues": STANDINGS_CACHE["rows"], "cached": True, "error": str(exc)[:120]}
         )
+
+
+@app.get("/api/push/vapid-public-key")
+async def push_vapid_key() -> JSONResponse:
+    return JSONResponse({"key": push.public_key_b64url()})
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(payload: dict = Body(...)) -> JSONResponse:
+    """Save a browser's push subscription, as handed back by `PushManager`."""
+    endpoint = payload.get("endpoint")
+    keys = payload.get("keys") or {}
+    p256dh, auth = keys.get("p256dh"), keys.get("auth")
+    if not endpoint or not p256dh or not auth:
+        return JSONResponse({"error": "suscripción incompleta"}, status_code=400)
+    store.save_push_subscription(str(endpoint), str(p256dh), str(auth))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(payload: dict = Body(...)) -> JSONResponse:
+    endpoint = payload.get("endpoint")
+    if endpoint:
+        store.delete_push_subscription(str(endpoint))
+    return JSONResponse({"ok": True})
+
+
+@app.get("/sw.js")
+async def service_worker() -> FileResponse:
+    # Served from the root, not /static/, so its default scope is the
+    # whole origin rather than just the static directory — matters if
+    # anything ever needs `clients.matchAll()` scoped to the app.
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
 
 
 @app.get("/")

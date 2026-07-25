@@ -61,6 +61,9 @@
     border: 1px solid var(--amber); color: var(--amber);
     padding: 2px 8px; font-size: 10px; letter-spacing: 1px;
   }
+  #push-btn.on { border-color: var(--green); color: var(--green); }
+  #push-btn.off { border-color: var(--line); color: var(--dim); }
+  #push-btn.denied { border-color: var(--red); color: var(--red); cursor: not-allowed; }
 
   /* ---------- layout ----------
      The grid fills whatever vertical space the header leaves. Columns
@@ -374,6 +377,10 @@
   <div class="spacer"></div>
   <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
   <div class="mode-chip">PAPER MODE</div>
+  <button class="mode-chip" id="push-btn" style="cursor:pointer; background:transparent; font:inherit"
+    title="Notificaciones push: arbitraje, edge BTC, favoritos fuertes y avisos de almacenamiento">
+    🔔 ALERTAS
+  </button>
   <div class="hstat" id="h-clock">--:--:--</div>
 </header>
 
@@ -1701,6 +1708,98 @@ setInterval(() => {
   if (currentView === "sports") refreshNews("sports", "news-sports");
   if (currentView === "trending") refreshNews("general", "news-general");
 }, 300000);
+
+/* ---------------- push notifications ----------------
+   Four triggers live on the server (arbitrage, BTC edge, ephemeral
+   storage, a sports favourite past 75%) and reach this browser through a
+   Web Push subscription. This block only manages that subscription —
+   the actual notification is shown by sw.js's `push` handler, which
+   fires even if this tab is closed. */
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+function setPushBtn(state) {
+  const btn = $("push-btn");
+  btn.classList.remove("on", "off", "denied");
+  if (state === "on") { btn.classList.add("on"); btn.textContent = "🔔 ALERTAS ON"; btn.disabled = false; }
+  else if (state === "denied") { btn.classList.add("denied"); btn.textContent = "🔕 BLOQUEADAS"; btn.disabled = true; }
+  else if (state === "unsupported") { btn.classList.add("denied"); btn.textContent = "🔕 NO SOPORTADO"; btn.disabled = true; }
+  else { btn.classList.add("off"); btn.textContent = "🔔 ALERTAS"; btn.disabled = false; }
+}
+
+async function currentPushSubscription() {
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+async function enablePush() {
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { setPushBtn(perm === "denied" ? "denied" : "off"); return; }
+
+    const { key } = await (await fetch("/api/push/vapid-public-key")).json();
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key),
+    });
+    await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sub.toJSON()),
+    });
+    setPushBtn("on");
+  } catch (e) {
+    console.error("push subscribe failed", e);
+    setPushBtn("off");
+  }
+}
+
+async function disablePush() {
+  try {
+    const sub = await currentPushSubscription();
+    if (sub) {
+      await fetch("/api/push/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      });
+      await sub.unsubscribe();
+    }
+  } catch (e) {
+    console.error("push unsubscribe failed", e);
+  }
+  setPushBtn("off");
+}
+
+async function initPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    setPushBtn("unsupported");
+    return;
+  }
+  if (Notification.permission === "denied") { setPushBtn("denied"); return; }
+
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    setPushBtn(sub ? "on" : "off");
+  } catch (e) {
+    setPushBtn("off");
+  }
+
+  $("push-btn").addEventListener("click", async () => {
+    const sub = await currentPushSubscription().catch(() => null);
+    if (sub) await disablePush(); else await enablePush();
+  });
+}
+
+initPush();
 </script>
 </body>
 </html>

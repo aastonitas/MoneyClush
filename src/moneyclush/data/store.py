@@ -151,6 +151,16 @@ def _init(conn: sqlite3.Connection) -> None:
             booted_at     TEXT NOT NULL,
             deployment_id TEXT
         );
+
+        -- Web Push subscriptions. The endpoint URL is unique per browser
+        -- installation and doubles as the primary key; p256dh/auth are the
+        -- keys pywebpush needs to encrypt the payload for that browser.
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            endpoint      TEXT PRIMARY KEY,
+            p256dh        TEXT NOT NULL,
+            auth          TEXT NOT NULL,
+            created_at    TEXT NOT NULL
+        );
         """
     )
     # The favourite track originally stored only the ask it paid and then
@@ -385,3 +395,31 @@ def load_fav_history(limit: int = 600) -> tuple[list[list], dict]:
 def fav_pnl() -> float:
     row = connect().execute("SELECT COALESCE(SUM(pnl), 0) AS s FROM fav_bets").fetchone()
     return float(row["s"])
+
+
+# ------------------------------------------------------------ push subscriptions
+
+def save_push_subscription(endpoint: str, p256dh: str, auth: str) -> None:
+    conn = connect()
+    with _lock:
+        conn.execute(
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth""",
+            (endpoint, p256dh, auth),
+        )
+        conn.commit()
+
+
+def delete_push_subscription(endpoint: str) -> None:
+    conn = connect()
+    with _lock:
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        conn.commit()
+
+
+def load_push_subscriptions() -> list[dict[str, Any]]:
+    conn = connect()
+    return [dict(r) for r in conn.execute(
+        "SELECT endpoint, p256dh, auth FROM push_subscriptions"
+    )]
