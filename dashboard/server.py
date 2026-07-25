@@ -19,15 +19,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import httpx
+import structlog
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+log = structlog.get_logger()
+
 from moneyclush.data.clob_websocket import ClobWebSocket
 from moneyclush.data.consensus_price import ConsensusFeed
 from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
+from moneyclush.data.news import fetch_headlines
+from moneyclush.data.news import to_rows as news_to_rows
 from moneyclush.data.sports import fetch_todays_matches, to_rows
+from moneyclush.data.trending import fetch_trending
+from moneyclush.data.trending import to_rows as trending_to_rows
 from moneyclush.data.opening_prices import OpeningPriceCache
 from moneyclush.data.models import (
     MarketInfo,
@@ -98,6 +105,15 @@ ARB_COST = 0.018
 # Fixtures move on the scale of hours; refetching every poll would be waste.
 SPORTS_TTL = 90.0
 SPORTS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
+
+# Headlines and trending markets both move slower than the 3s poll loop.
+NEWS_TTL = 300.0
+NEWS_CACHE: dict[str, dict] = {
+    cat: {"rows": [], "fetched_at": 0.0, "error": None}
+    for cat in ("crypto", "sports", "general")
+}
+TRENDING_TTL = 120.0
+TRENDING_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
 
 
@@ -653,6 +669,68 @@ async def get_sports() -> JSONResponse:
                 "age_s": round(now - SPORTS_CACHE["fetched_at"])
                 if SPORTS_CACHE["fetched_at"] else None,
                 "error": SPORTS_CACHE["error"],
+            }
+        )
+
+
+@app.get("/api/news")
+async def get_news(category: str = "general") -> JSONResponse:
+    if category not in NEWS_CACHE:
+        return JSONResponse({"error": "unknown category"}, status_code=400)
+
+    cache = NEWS_CACHE[category]
+    now = time.time()
+    if cache["rows"] and now - cache["fetched_at"] < NEWS_TTL:
+        return JSONResponse(
+            {"headlines": cache["rows"], "cached": True,
+             "age_s": round(now - cache["fetched_at"])}
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            headlines = await fetch_headlines(client, category)
+        rows = news_to_rows(headlines)
+        cache.update(rows=rows, fetched_at=now, error=None)
+        return JSONResponse({"headlines": rows, "cached": False, "age_s": 0})
+    except Exception as exc:
+        log.warning("news.fetch_failed", category=category, error=str(exc)[:120])
+        cache["error"] = str(exc)[:120]
+        return JSONResponse(
+            {
+                "headlines": cache["rows"],
+                "cached": True,
+                "age_s": round(now - cache["fetched_at"]) if cache["fetched_at"] else None,
+                "error": cache["error"],
+            }
+        )
+
+
+@app.get("/api/trending")
+async def get_trending() -> JSONResponse:
+    """Highest-volume Polymarket events across every category, not just BTC."""
+    now = time.time()
+    if TRENDING_CACHE["rows"] and now - TRENDING_CACHE["fetched_at"] < TRENDING_TTL:
+        return JSONResponse(
+            {"events": TRENDING_CACHE["rows"], "cached": True,
+             "age_s": round(now - TRENDING_CACHE["fetched_at"])}
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            events = await fetch_trending(client)
+        rows = trending_to_rows(events)
+        TRENDING_CACHE.update(rows=rows, fetched_at=now, error=None)
+        return JSONResponse({"events": rows, "cached": False, "age_s": 0})
+    except Exception as exc:
+        log.warning("trending.fetch_failed", error=str(exc)[:120])
+        TRENDING_CACHE["error"] = str(exc)[:120]
+        return JSONResponse(
+            {
+                "events": TRENDING_CACHE["rows"],
+                "cached": True,
+                "age_s": round(now - TRENDING_CACHE["fetched_at"])
+                if TRENDING_CACHE["fetched_at"] else None,
+                "error": TRENDING_CACHE["error"],
             }
         )
 

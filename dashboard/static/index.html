@@ -61,6 +61,8 @@
     align-items: start;
   }
   .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .grid-2col { display: grid; grid-template-columns: 250px 1fr; gap: 8px; align-items: start; }
+  @media (max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
   @media (max-width: 1200px) { .grid { grid-template-columns: 250px 1fr 1fr; } .col-3 { display: contents; } }
   @media (max-width: 900px)  { .grid { grid-template-columns: 1fr; } .col { display: flex; } .col-3 { display: flex; } }
 
@@ -103,6 +105,17 @@
   }
   .vig-ok { color: var(--dim); }
   .vig-arb { color: var(--green); font-weight: 700; }
+
+  /* news */
+  .news-list { max-height: 420px; overflow-y: auto; }
+  .news-item { padding: 6px 2px; border-bottom: 1px solid var(--line); }
+  .news-item:last-child { border-bottom: none; }
+  .news-item a { color: var(--text); font-size: 10.5px; line-height: 1.4; text-decoration: none; }
+  .news-item a:hover { color: var(--green); }
+  .news-src { display: block; margin-top: 3px; font-size: 9px; color: var(--dim); letter-spacing: .05em; }
+
+  /* trending outcomes bars, reusing .oc from sports but a taller name column */
+  .trend-oc-name { flex: 1.4; }
 
   .panel-head {
     display: flex; align-items: center; gap: 8px;
@@ -219,6 +232,7 @@
   <div class="tabs">
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
+    <button class="tab" data-view="trending">DESTACADOS</button>
   </div>
   <div class="spacer"></div>
   <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
@@ -256,6 +270,12 @@
         <div class="sstat"><span>dispersión fuentes</span><b id="s-disp">—</b></div>
         <div class="sstat"><span>métricas</span><b class="dim">paper_metrics.jsonl</b></div>
       </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS CRYPTO</span>
+        <i class="info" data-key="news-crypto">i</i></div>
+      <div class="panel-body news-list" id="news-crypto"><div class="dim">cargando…</div></div>
     </div>
   </div>
 
@@ -346,14 +366,56 @@
 </div>
 
 <!-- ============ VISTA DEPORTES ============ -->
-<div id="view-sports" style="display:none">
-  <div class="panel" style="margin:10px">
-    <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS DE HOY</span>
-      <i class="info" data-key="sports">i</i>
-      <span class="badge" id="sports-count">—</span>
-      <span class="badge amber" id="sports-age" style="display:none">—</span></div>
-    <div class="sports-grid" id="sports-grid">
-      <div class="dim" style="padding:6px">cargando partidos…</div>
+<div class="grid-2col" id="view-sports" style="display:none">
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
+        <i class="info" data-key="news-sports">i</i></div>
+      <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS DE HOY</span>
+        <i class="info" data-key="sports">i</i>
+        <span class="badge" id="sports-count">—</span>
+        <span class="badge amber" id="sports-age" style="display:none">—</span></div>
+      <div class="sports-grid" id="sports-grid">
+        <div class="dim" style="padding:6px">cargando partidos…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ VISTA DESTACADOS ============ -->
+<div class="grid-2col" id="view-trending" style="display:none">
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
+        <i class="info" data-key="news-general">i</i></div>
+      <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">X / TWITTER</span>
+        <i class="info" data-key="x-pending">i</i>
+        <span class="badge amber">PENDIENTE</span></div>
+      <div class="panel-body">
+        <div class="dim" style="padding:4px 2px; line-height:1.5">
+          Requiere API key de pago (X Developer, plan Basic ~$100/mes).
+          Sin credenciales aún — ver el ícono ⓘ para instrucciones.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">SUCESOS DESTACADOS · POLYMARKET</span>
+        <i class="info" data-key="trending">i</i>
+        <span class="badge" id="trending-count">—</span>
+        <span class="badge amber" id="trending-age" style="display:none">—</span></div>
+      <div class="sports-grid" id="trending-grid">
+        <div class="dim" style="padding:6px">cargando…</div>
+      </div>
     </div>
   </div>
 </div>
@@ -379,6 +441,11 @@ const INFO = {
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "PnL acumulado del paper trading. Solo cambia cuando una ventana se resuelve: cada posición paga $1 por share ganadora menos lo invertido. La curva plana significa que hay posiciones abiertas esperando resolución."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
+  "news-crypto": ["NOTICIAS CRYPTO", "Titulares de CoinDesk y Cointelegraph, los más recientes primero. Se refrescan cada 5 minutos — las noticias no se mueven a la velocidad de un order book."],
+  "news-sports": ["NOTICIAS DEPORTES", "Titulares de BBC Sport y ESPN. Contexto para los partidos de la pestaña, no señal de trading."],
+  "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
+  "x-pending": ["X / TWITTER — PENDIENTE", "X cerró su API gratuita en 2023. Para conectar alertas en tiempo real hace falta una cuenta de X Developer con el plan Basic (~$100/mes) y un Bearer Token. Pasos: 1) entrar a developer.x.com y crear un proyecto, 2) suscribirse al plan Basic o superior, 3) generar el Bearer Token en las Keys & Tokens del proyecto, 4) pasar ese token aquí para conectar el feed. Sin eso no hay forma legal de traer datos de X en tiempo real."],
+  trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes, esports. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, no necesariamente los más importantes del evento. Volumen y liquidez son las señales de qué le importa al dinero real en Polymarket."],
   sports: ["PARTIDOS DE HOY", "Partidos reales de Polymarket que resuelven en las próximas 30 horas. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
@@ -669,21 +736,109 @@ async function refreshSports() {
   }
 }
 
+/* ---------------- noticias ---------------- */
+function renderNews(elId, data) {
+  const list = data.headlines || [];
+  const el = $(elId);
+  if (!list.length) {
+    el.innerHTML = '<div class="dim">sin titulares</div>';
+    return;
+  }
+  el.innerHTML = list.map(h => `
+    <div class="news-item">
+      <a href="${h.link}" target="_blank" rel="noopener noreferrer">${h.title}</a>
+      <span class="news-src">${h.source}</span>
+    </div>`).join("");
+}
+
+async function refreshNews(category, elId) {
+  try {
+    const r = await fetch("/api/news?category=" + category);
+    renderNews(elId, await r.json());
+  } catch (e) {
+    $(elId).innerHTML = '<div class="dim">no se pudo cargar</div>';
+  }
+}
+
+/* ---------------- destacados / trending ---------------- */
+function renderTrending(data) {
+  const list = data.events || [];
+  $("trending-count").textContent = list.length + " EVENTOS";
+
+  const ageEl = $("trending-age");
+  if (data.age_s != null && data.age_s > 180) {
+    ageEl.style.display = "";
+    ageEl.textContent = "DATOS DE HACE " + Math.round(data.age_s / 60) + "MIN";
+  } else {
+    ageEl.style.display = "none";
+  }
+
+  if (!list.length) {
+    $("trending-grid").innerHTML = '<div class="dim" style="padding:6px">sin eventos</div>';
+    return;
+  }
+
+  $("trending-grid").innerHTML = list.map(e => {
+    const rows = (e.outcomes || []).map(o => {
+      const pct = Math.round((o.prob || 0) * 100);
+      return `<div class="oc">
+        <span class="oc-name trend-oc-name">${o.label}</span>
+        <span class="oc-bar"><span class="oc-fill" style="width:${pct}%"></span></span>
+        <span class="oc-pct">${pct}%</span>
+      </div>`;
+    }).join("");
+
+    const ends = e.ends_in_days != null
+      ? (e.ends_in_days < 1 ? "cierra <1d" : `cierra en ${e.ends_in_days}d`)
+      : "";
+
+    return `<div class="match">
+      <div class="match-top">
+        <span class="match-league">${(e.category || "").toUpperCase()}</span>
+        <span class="match-when">${ends}</span>
+      </div>
+      <div class="match-title">${e.title}</div>
+      ${rows}
+      <div class="match-foot">
+        <span>liq $${(e.liquidity / 1000).toFixed(0)}K · vol24h $${(e.volume_24h / 1000).toFixed(0)}K</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function refreshTrending() {
+  if (currentView !== "trending") return;
+  try {
+    const r = await fetch("/api/trending");
+    renderTrending(await r.json());
+  } catch (e) {
+    $("trending-grid").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
+  }
+}
+
+const VIEWS = ["crypto", "sports", "trending"];
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     currentView = btn.dataset.view;
     document.querySelectorAll(".tab").forEach(b =>
       b.classList.toggle("active", b === btn));
-    $("view-crypto").style.display = currentView === "crypto" ? "" : "none";
-    $("view-sports").style.display = currentView === "sports" ? "" : "none";
-    if (currentView === "sports") refreshSports();
+    VIEWS.forEach(v => { $("view-" + v).style.display = v === currentView ? "" : "none"; });
+    if (currentView === "sports") { refreshSports(); refreshNews("sports", "news-sports"); }
+    if (currentView === "trending") { refreshTrending(); refreshNews("general", "news-general"); }
   });
 });
 
 setInterval(() => { $("h-clock").textContent = new Date().toLocaleTimeString("es-ES"); }, 1000);
 refresh();
+refreshNews("crypto", "news-crypto");
 setInterval(refresh, 3000);
 setInterval(refreshSports, 30000);
+setInterval(refreshTrending, 60000);
+setInterval(() => {
+  refreshNews("crypto", "news-crypto");
+  if (currentView === "sports") refreshNews("sports", "news-sports");
+  if (currentView === "trending") refreshNews("general", "news-general");
+}, 300000);
 </script>
 </body>
 </html>
