@@ -50,6 +50,9 @@
   }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
   .spacer { flex: 1; }
+  .h-bot { display: flex; align-items: center; gap: 6px; }
+  .h-bot-label { font-size: 9px; color: var(--dim); letter-spacing: .06em; }
+  #h-bot-spark { display: block; }
   .mode-chip {
     border: 1px solid var(--amber); color: var(--amber);
     padding: 2px 8px; font-size: 10px; letter-spacing: 1px;
@@ -214,6 +217,16 @@
   .cmp-label { flex: 1; color: var(--dim); }
   .cmp-v { width: 62px; text-align: right; font-weight: 600; }
 
+  /* calibration-by-band table */
+  .cal-title { font-size: 9px; color: var(--dim); letter-spacing: .06em; margin-bottom: 4px; }
+  .cal-table { width: 100%; font-size: 9.5px; border-collapse: collapse; }
+  .cal-table th {
+    text-align: right; color: var(--text-dim); font-weight: 500;
+    padding: 2px 4px; font-size: 8.5px; letter-spacing: .03em;
+  }
+  .cal-table th:first-child, .cal-table td:first-child { text-align: left; }
+  .cal-table td { text-align: right; padding: 2px 4px; border-top: 1px solid rgba(255,255,255,.03); }
+
   /* news */
   /* Only cap the list when it is not the panel absorbing the column's
      slack — inside a .grow panel the flex height must win. */
@@ -349,6 +362,11 @@
     <button class="tab" data-view="sports">DEPORTES</button>
     <button class="tab" data-view="trending">DESTACADOS</button>
   </div>
+  <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
+    <span class="h-bot-label">BOT</span>
+    <canvas id="h-bot-spark" width="70" height="20"></canvas>
+    <b id="h-bot-pnl" class="dim">$0.00</b>
+  </div>
   <div class="spacer"></div>
   <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
   <div class="mode-chip">PAPER MODE</div>
@@ -432,6 +450,7 @@
         <div class="pnl-big" id="pnl-val">$0.00</div>
         <canvas id="pnl-canvas"></canvas>
         <div class="dim" id="pnl-why" style="font-size:9px; margin-top:6px; line-height:1.45"></div>
+        <div id="pnl-calibration" style="margin-top:8px"></div>
       </div>
     </div>
   </div>
@@ -635,14 +654,14 @@ const INFO = {
   scanner: ["MISPRICING SCANNER", "Compara el fair value del modelo contra el mejor ask real del CLOB. El edge es NETO: descuenta comisiones (1.2%), slippage (0.6%) y margen de seguridad (1%). z = distancia al opening dividida por la volatilidad restante — es la variable que realmente decide el precio. |z| alto = resultado casi definido. EDGE > 2% = operable, WATCH = positivo pero insuficiente."],
   positions: ["PAPER POSITIONS", "Inventario simulado por mercado. UP/DOWN muestra shares y coste medio. Las shares emparejadas (mismo número de Up y Down) pagan $1 seguro al resolver; el exceso es exposición direccional. INV = capital invertido."],
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
-  pnl: ["PNL CURVE", "PnL acumulado del paper trading. Solo cambia cuando una ventana se resuelve: cada posición paga $1 por share ganadora menos lo invertido. La curva plana significa que hay posiciones abiertas esperando resolución."],
+  pnl: ["PNL CURVE", "Dos pistas de paper trading en BTC. El arbitraje Up+Down exige que el par cueste ≤96¢ para operar — normalmente cotiza sobre 100¢, así que su curva está plana a propósito, no por fallo. La curva que se mueve es 'backing al favorito': $1 por ventana al lado que el mercado cotiza más caro, entrado pasado el 40% de la ventana. Debajo, calibración por banda de precio — el mismo desglose que en deportes, para ver si el sesgo del favorito aparece también aquí."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
   "news-crypto": ["NOTICIAS CRYPTO", "Titulares de CoinDesk y Cointelegraph, los más recientes primero. Traducidos automáticamente al español — pasa el ratón por encima para ver el original en inglés. Se refrescan cada 5 minutos; las noticias no se mueven a la velocidad de un order book."],
   "news-sports": ["NOTICIAS DEPORTES", "Titulares de BBC Sport y ESPN, traducidos al español (el original aparece al pasar el ratón). Contexto para los partidos de la pestaña, no señal de trading."],
   "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Traducidos al español; el original en inglés aparece al pasar el ratón. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
   "x-pending": ["X / TWITTER — PENDIENTE", "X cerró su API gratuita en 2023. Para conectar alertas en tiempo real hace falta una cuenta de X Developer con el plan Basic (~$100/mes) y un Bearer Token. Pasos: 1) entrar a developer.x.com y crear un proyecto, 2) suscribirse al plan Basic o superior, 3) generar el Bearer Token en las Keys & Tokens del proyecto, 4) pasar ese token aquí para conectar el feed. Sin eso no hay forma legal de traer datos de X en tiempo real."],
   trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, y el título enlaza al mercado en Polymarket. Filtros: CIERRAN PRONTO son los que resuelven en 7 días o menos; A LARGO PLAZO el resto. ABSURDOS son mercados reales pero peculiares — cuántas veces tuiteará Elon Musk esta semana, qué palabras dirá un CEO en su llamada de resultados, qué dirá MrBeast en su próximo vídeo. Se cuelan aparte porque mueven mucho menos dinero y quedarían enterrados por volumen."],
-  manual: ["TU SIMULADOR · $1 POR PICK", "Pulsa el botón $1→$X en cualquier resultado para apostar 1 dólar simulado a ese desenlace. El botón muestra lo que pagaría: a 25¢ un dólar compra 4 shares, así que devuelve $4 si aciertas y pierdes $1 si no. Se registra al precio del momento y no se puede cambiar después — un pick por evento. Se resuelve solo cuando el partido termina, comparando contra el resultado real de Polymarket. La cifra que importa no es cuánto aciertas sino la comparación con ESPERADA POR PRECIO: acertar el 80% suena bien, pero si apostabas a favoritos de 85¢ estabas perdiendo dinero."],
+  manual: ["SIMULADOR · $1 POR PICK", "Comparación lado a lado: tus picks manuales contra los de la IA (backing automático al favorito). Pulsa $1→$X en cualquier resultado para apostar. CALIBRACIÓN IA desglosa por banda de precio: si en la banda 60-70% el acierto real es menor que el esperado, esos picks estaban sobrevalorados — es donde el backtest de BTC encontró el sesgo del favorito, y esta tabla comprueba si aparece también en deportes.", "Pulsa el botón $1→$X en cualquier resultado para apostar 1 dólar simulado a ese desenlace. El botón muestra lo que pagaría: a 25¢ un dólar compra 4 shares, así que devuelve $4 si aciertas y pierdes $1 si no. Se registra al precio del momento y no se puede cambiar después — un pick por evento. Se resuelve solo cuando el partido termina, comparando contra el resultado real de Polymarket. La cifra que importa no es cuánto aciertas sino la comparación con ESPERADA POR PRECIO: acertar el 80% suena bien, pero si apostabas a favoritos de 85¢ estabas perdiendo dinero."],
   standings: ["TABLAS DE LIGAS", "Clasificaciones reales vía TheSportsDB para Liga 1 de Perú, Liga MX, LaLiga y MLS. El plan gratuito solo devuelve los cinco primeros de cada tabla, así que es un top 5, no la clasificación completa. MLS mezcla sus dos conferencias en la misma respuesta, por eso sus posiciones aparecen repetidas (1, 1, 2, 2...). Si una temporada aún no ha empezado se indica en vez de mostrar una tabla de ceros."],
   predictions: ["SIMULACIÓN IA · $1 AL FAVORITO", "En cada partido apostamos 1 share al resultado que el mercado considera más probable (mínimo 55%), pagando el ask real — no el último precio negociado. Si acierta ganamos (1 − coste); si falla perdemos el coste. La cifra clave no es la tasa de acierto sino su distancia con la ESPERADA POR PRECIO: si el mercado cotiza un favorito a 70¢, debería ganar el 70% de las veces. Si gana menos, los favoritos están sobrevalorados. El backtest sobre 299 ventanas de BTC encontró exactamente eso — apostar contra el favorito en la banda 0.60-0.90 daba +2-4¢ por operación. Esta simulación comprueba si el mismo sesgo aparece en deportes. Cada pick se registra una sola vez y queda grabado en disco, así que el historial no se puede reescribir a posteriori."],
   "pred-log": ["REGISTRO DE PREDICCIONES", "Cada apuesta simulada con su probabilidad al momento de registrarla, lo que costó el share, y el resultado una vez el partido resolvió. Las abiertas siguen en juego. PNL está en céntimos por share."],
@@ -703,9 +722,65 @@ const hhmmss = ts => {
 };
 
 /* ---------------- refresh ---------------- */
+// Combined equity curve for the header sparkline: the two automatic paper
+// tracks (BTC favourite-backing + sports IA favourite-backing) merged into
+// one timeline. Populated from whichever endpoint answers first.
+let latestFavCurve = [], latestFavPnl = 0;
+let latestIaCurve = [], latestIaPnl = 0;
+
+function renderBotHeader() {
+  const total = latestFavPnl + latestIaPnl;
+  const el = $("h-bot-pnl");
+  el.textContent = (total >= 0 ? "+" : "−") + "$" + Math.abs(total).toFixed(2);
+  el.className = total > 0 ? "up" : total < 0 ? "down" : "dim";
+
+  // Cumulative curves -> per-event deltas -> merge by time -> running total.
+  const deltas = [];
+  [latestFavCurve, latestIaCurve].forEach(curve => {
+    let prev = 0;
+    curve.forEach(([ts, cum]) => { deltas.push([ts, cum - prev]); prev = cum; });
+  });
+  deltas.sort((a, b) => a[0] - b[0]);
+  let running = 0;
+  const merged = deltas.map(([ts, d]) => { running += d; return running; });
+  drawSparkline($("h-bot-spark"), merged);
+}
+
+function drawSparkline(canvas, values) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (values.length < 2) return;
+
+  const min = Math.min(0, ...values), max = Math.max(0, ...values);
+  const range = max - min || 1;
+  const x = i => (i / (values.length - 1)) * (w - 2) + 1;
+  const y = v => h - 1 - ((v - min) / range) * (h - 2);
+
+  ctx.strokeStyle = values[values.length - 1] >= 0
+    ? "#3ecf6e" : "#e5484d";
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  values.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
+  ctx.stroke();
+
+  // Zero line, when the series crosses it, gives the eye a reference.
+  if (min < 0 && max > 0) {
+    ctx.strokeStyle = "rgba(255,255,255,.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y(0)); ctx.lineTo(w, y(0));
+    ctx.stroke();
+  }
+}
+
 async function refresh() {
   try {
     const s = await (await fetch("/api/state")).json();
+
+    latestFavCurve = s.fav_curve || [];
+    latestFavPnl = s.fav_pnl || 0;
+    renderBotHeader();
 
     $("h-btc").textContent = "$" + fmt(s.btc_price, 0);
     $("h-eth").textContent = "$" + fmt(s.eth_price, 0);
@@ -842,10 +917,12 @@ async function refresh() {
       $("pnl-why").innerHTML =
         `curva = <b>backing al favorito</b>, $1 por ventana BTC · ${fav.resolved} resueltas, ` +
         `acierto ${hr} vs ${eh} esperado · ${gate.fav_open || 0} en juego<br>${arbTxt}`;
+      $("pnl-calibration").innerHTML = calibrationTable(fav.calibration, "POR BANDA DE PRECIO");
     } else {
       $("pnl-why").innerHTML = (gate.fav_open || 0)
         ? `${gate.fav_open} apuesta(s) al favorito en juego — la curva se moverá al cerrar la ventana<br>${arbTxt}`
         : `esperando la primera ventana BTC<br>${arbTxt}`;
+      $("pnl-calibration").innerHTML = "";
     }
     drawCurve($("pnl-canvas"), useFav ? (s.fav_curve || []) : (s.pnl_curve || []));
 
@@ -1171,6 +1248,32 @@ let predLogSource = "manual";
 let predData = { ia: {}, manual: {} };
 
 // Two columns of the same metrics: yours against the automatic picks.
+// A single hit-rate number hides where the edge actually lives — the BTC
+// backtest found the bias concentrated in 0.60-0.90, not spread evenly.
+function calibrationTable(bands, title) {
+  const rows = (bands || []).filter(b => b.n > 0);
+  if (!rows.length) {
+    return `<div class="cal-title">${title}</div><div class="dim" style="font-size:9.5px">sin resueltas todavía</div>`;
+  }
+  return `
+    <div class="cal-title">${title}</div>
+    <table class="cal-table">
+      <thead><tr><th>PRECIO</th><th>N</th><th>ACIERTO</th><th>ESPERADO</th><th>DIF</th><th>PNL</th></tr></thead>
+      <tbody>${rows.map(b => {
+        const edgeCls = b.edge_pts == null ? "dim" : b.edge_pts <= -5 ? "amber" : b.edge_pts >= 5 ? "up" : "dim";
+        const pnlCls = (b.pnl || 0) > 0 ? "up" : (b.pnl || 0) < 0 ? "down" : "dim";
+        return `<tr>
+          <td>${b.band}</td>
+          <td class="dim">${b.n}</td>
+          <td>${(b.hit_rate * 100).toFixed(0)}%</td>
+          <td class="cyan">${(b.expected_hit_rate * 100).toFixed(0)}%</td>
+          <td class="${edgeCls}">${b.edge_pts >= 0 ? "+" : ""}${b.edge_pts.toFixed(1)}</td>
+          <td class="${pnlCls}">${(b.pnl || 0) >= 0 ? "+" : "−"}$${Math.abs(b.pnl || 0).toFixed(2)}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+}
+
 function compareBlock(manS, iaS) {
   const row = (label, fm, fi, cls) =>
     `<div class="cmp-row"><span class="cmp-label">${label}</span>` +
@@ -1213,7 +1316,10 @@ function compareBlock(manS, iaS) {
     <div class="cmp-row"><span class="cmp-label">ROI</span>
       <span class="cmp-v ${cls(manS.pnl)}">${pct(manS.roi)}</span>
       <span class="cmp-v ${cls(iaS.pnl)}">${pct(iaS.roi)}</span></div>
-    <div style="margin-top:8px; line-height:1.45; font-size:9.5px">${note}</div>`;
+    <div style="margin-top:8px; line-height:1.45; font-size:9.5px">${note}</div>
+    <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--line)">
+      ${calibrationTable(iaS.calibration, "CALIBRACIÓN IA POR BANDA DE PRECIO")}
+    </div>`;
 }
 
 function statsBlock(s, isIa) {
@@ -1279,6 +1385,10 @@ function renderPredictions(data) {
 
   const iaS = ia.stats || {}, manS = man.stats || {};
 
+  latestIaCurve = iaS.curve || [];
+  latestIaPnl = iaS.pnl || 0;
+  renderBotHeader();
+
   // Sports: one merged panel comparing both. Trending: your picks only.
   if ($("sim-compare")) {
     $("sim-badge").textContent = `TÚ ${manS.total || 0} · IA ${iaS.total || 0}`;
@@ -1308,7 +1418,9 @@ function renderPredictions(data) {
 }
 
 async function refreshPredictions() {
-  if (currentView === "crypto") return;
+  // Runs on every view: the header sparkline needs the IA curve regardless
+  // of which tab is open, and renderPredictions() is a no-op wherever the
+  // sports/trending panels it targets are not in the DOM.
   try {
     const r = await fetch("/api/predictions");
     renderPredictions(await r.json());
@@ -1518,6 +1630,7 @@ document.querySelectorAll(".tab").forEach(btn => {
 setInterval(() => { $("h-clock").textContent = new Date().toLocaleTimeString("es-ES"); }, 1000);
 refresh();
 refreshNews("crypto", "news-crypto");
+refreshPredictions();
 setInterval(refresh, 3000);
 setInterval(refreshSports, 30000);
 setInterval(refreshTrending, 60000);

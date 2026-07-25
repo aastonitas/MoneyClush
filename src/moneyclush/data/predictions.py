@@ -36,6 +36,48 @@ UA_HEADERS = {"User-Agent": "Mozilla/5.0"}
 # A resolved outcome settles at exactly 1; allow for float noise.
 RESOLVED_AT = 0.99
 
+# The backtest on 299 BTC windows found the favourite-overpricing bias
+# concentrated in 0.60-0.90, not spread evenly, so a single aggregate hit
+# rate hides exactly the thing worth knowing. These bands are where that
+# split matters: cheap picks, the suspect band, and near-locks.
+CALIBRATION_BANDS = (
+    (0.50, 0.60, "50-60%"),
+    (0.60, 0.70, "60-70%"),
+    (0.70, 0.80, "70-80%"),
+    (0.80, 0.90, "80-90%"),
+    (0.90, 1.01, "90%+"),
+)
+
+
+def calibration_table(predictions: list) -> list[dict]:
+    """Realised vs. expected hit rate inside each price band.
+
+    A pick's own ask (not its normalised probability) is the number a
+    trader actually paid, so banding on `pick_ask` is what tells you
+    whether a given price level is worth backing or fading.
+    """
+    rows = []
+    for lo, hi, label in CALIBRATION_BANDS:
+        bucket = [p for p in predictions if p.resolved and lo <= p.pick_ask < hi]
+        if not bucket:
+            rows.append({
+                "band": label, "n": 0, "hit_rate": None,
+                "expected_hit_rate": None, "edge_pts": None, "pnl": None,
+            })
+            continue
+        wins = sum(1 for p in bucket if p.won)
+        hit = wins / len(bucket)
+        expected = sum(p.pick_ask for p in bucket) / len(bucket)
+        rows.append({
+            "band": label,
+            "n": len(bucket),
+            "hit_rate": round(hit, 4),
+            "expected_hit_rate": round(expected, 4),
+            "edge_pts": round((hit - expected) * 100, 2),
+            "pnl": round(sum(p.pnl for p in bucket), 4),
+        })
+    return rows
+
 
 @dataclass
 class Prediction:
@@ -355,7 +397,26 @@ class PredictionLedger:
             "pnl_per_trade": round(pnl / len(resolved), 4) if resolved else None,
             "roi": round(pnl / staked, 4) if staked > 0 else None,
             "open_stake": round(sum(p.stake for p in picks if not p.resolved), 2),
+            "calibration": calibration_table(resolved),
+            "curve": self._equity_curve(resolved),
         }
+
+    @staticmethod
+    def _equity_curve(resolved: list[Prediction]) -> list[list]:
+        """Cumulative PnL over time, for the header sparkline."""
+        ordered = sorted(resolved, key=lambda p: p.resolved_at or "")
+        curve = []
+        running = 0.0
+        for p in ordered:
+            running += p.pnl
+            try:
+                ts_ms = int(
+                    datetime.fromisoformat(p.resolved_at).timestamp() * 1000
+                )
+            except (TypeError, ValueError):
+                continue
+            curve.append([ts_ms, round(running, 4)])
+        return curve[-300:]
 
     def recent(self, limit: int = 40, source: str | None = None) -> list[dict]:
         picks = [

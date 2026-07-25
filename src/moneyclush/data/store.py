@@ -148,6 +148,17 @@ def save_fav_bet(
         conn.commit()
 
 
+# Same bands as the sports ledger (see predictions.py) so the two tracks
+# read side by side: cheap picks, the suspect 60-90 range, near-locks.
+CALIBRATION_BANDS = (
+    (0.50, 0.60, "50-60%"),
+    (0.60, 0.70, "60-70%"),
+    (0.70, 0.80, "70-80%"),
+    (0.80, 0.90, "80-90%"),
+    (0.90, 1.01, "90%+"),
+)
+
+
 def load_fav_history(limit: int = 600) -> tuple[list[list], dict]:
     """Cumulative PnL curve and aggregate stats, oldest first."""
     conn = connect()
@@ -176,6 +187,29 @@ def load_fav_history(limit: int = 600) -> tuple[list[list], dict]:
         stats["hit_rate"] = round(wins / n, 4)
         stats["expected_hit_rate"] = round(expected / n, 4)
         stats["roi"] = round(total / n, 4)
+
+    calibration = []
+    for lo, hi, label in CALIBRATION_BANDS:
+        bucket = [r for r in rows if lo <= r["price"] < hi]
+        if not bucket:
+            calibration.append({
+                "band": label, "n": 0, "hit_rate": None,
+                "expected_hit_rate": None, "edge_pts": None, "pnl": None,
+            })
+            continue
+        bwins = sum(r["won"] for r in bucket)
+        hit = bwins / len(bucket)
+        exp = sum(r["price"] for r in bucket) / len(bucket)
+        calibration.append({
+            "band": label,
+            "n": len(bucket),
+            "hit_rate": round(hit, 4),
+            "expected_hit_rate": round(exp, 4),
+            "edge_pts": round((hit - exp) * 100, 2),
+            "pnl": round(sum(r["pnl"] for r in bucket), 4),
+        })
+    stats["calibration"] = calibration
+
     return curve[-limit:], stats
 
 

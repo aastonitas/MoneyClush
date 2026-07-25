@@ -109,7 +109,7 @@ paper_meta: dict[str, dict] = {}
 # Favourite-backing track: one $1 bet per BTC window, settled at window close.
 fav_positions: dict[str, dict] = {}
 fav_settled: set[str] = set()
-FAV_MIN_PRICE = 0.15
+FAV_MIN_PRICE = 0.50
 FAV_MAX_PRICE = 0.92
 opening_cache = OpeningPriceCache()        # real opening prices from OKX candles
 consensus_feed = ConsensusFeed()           # cross-exchange dispersion monitor
@@ -470,11 +470,15 @@ async def poll_loop() -> None:
                                 and book_up.best_ask is not None
                                 and book_down.best_ask is not None
                             ):
+                                # The favourite is the pricier side — the one
+                                # the market rates more likely — not the
+                                # cheaper one. Backing the cheap side would
+                                # silently test the opposite hypothesis.
                                 up_ask, down_ask = book_up.best_ask, book_down.best_ask
                                 side = (
-                                    OutcomeSide.UP if up_ask < down_ask else OutcomeSide.DOWN
+                                    OutcomeSide.UP if up_ask > down_ask else OutcomeSide.DOWN
                                 )
-                                price = min(up_ask, down_ask)
+                                price = max(up_ask, down_ask)
                                 if FAV_MIN_PRICE <= price <= FAV_MAX_PRICE:
                                     fav_positions[cid] = {
                                         "side": side,
