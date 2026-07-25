@@ -128,6 +128,31 @@ class Match:
         return "live"
 
     @property
+    def url(self) -> str:
+        return f"https://polymarket.com/event/{self.slug}"
+
+    @property
+    def day_bucket(self) -> str:
+        """Which calendar day the fixture kicks off on, in UTC.
+
+        Grouping by date rather than by hours-from-now keeps "tomorrow"
+        meaning tomorrow: a match at 23:00 today and one at 01:00 tonight
+        are two hours apart but belong in different buckets.
+        """
+        if self.status == "live":
+            return "live"
+        if not self.start_time:
+            return "later"
+
+        today = datetime.now(timezone.utc).date()
+        delta = (self.start_time.date() - today).days
+        if delta <= 0:
+            return "today"
+        if delta == 1:
+            return "tomorrow"
+        return "later"
+
+    @property
     def minutes_to_start(self) -> float | None:
         if not self.start_time:
             return None
@@ -311,9 +336,9 @@ def _build_match(event: dict) -> Match | None:
 
 async def fetch_todays_matches(
     client: httpx.AsyncClient,
-    hours_ahead: int = 30,
+    hours_ahead: int = 52,
     min_liquidity: float = 1000.0,
-    limit: int = 400,
+    limit: int = 500,
 ) -> list[Match]:
     """Sports fixtures resolving within `hours_ahead`, richest book first."""
     horizon = datetime.now(timezone.utc) + timedelta(hours=hours_ahead)
@@ -369,10 +394,12 @@ def to_rows(matches: list[Match]) -> list[dict]:
                 "id": m.event_id,
                 "title": m.title,
                 "slug": m.slug,
+                "url": m.url,
                 "league": m.league,
                 "sport": m.sport,
                 "shape": m.shape,
                 "status": m.status,
+                "day_bucket": m.day_bucket,
                 "minutes_to_start": (
                     round(m.minutes_to_start) if m.minutes_to_start is not None else None
                 ),

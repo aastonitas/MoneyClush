@@ -24,8 +24,10 @@
     color: var(--text);
     font-family: var(--mono);
     font-size: 12px;
-    min-height: 100vh;
+    height: 100vh;
     padding: 8px;
+    display: flex;
+    flex-direction: column;
   }
 
   /* ---------- header ---------- */
@@ -53,20 +55,49 @@
     padding: 2px 8px; font-size: 10px; letter-spacing: 1px;
   }
 
-  /* ---------- layout ---------- */
+  /* ---------- layout ----------
+     The grid fills whatever vertical space the header leaves. Columns
+     stretch to equal height, and one panel per column is marked .grow so
+     it absorbs the slack and scrolls internally — otherwise short columns
+     leave dead space at the bottom on a wide desktop. */
   .grid {
     display: grid;
     grid-template-columns: 250px 1fr 1.15fr 1fr;
     gap: 8px;
-    align-items: start;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
   }
-  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  .grid-2col { display: grid; grid-template-columns: 250px 1fr; gap: 8px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+  .grid-2col {
+    display: grid; grid-template-columns: 260px 1fr; gap: 8px;
+    align-items: stretch; flex: 1; min-height: 0;
+  }
   @media (max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
   @media (max-width: 1200px) { .grid { grid-template-columns: 250px 1fr 1fr; } .col-3 { display: contents; } }
   @media (max-width: 900px)  { .grid { grid-template-columns: 1fr; } .col { display: flex; } .col-3 { display: flex; } }
 
-  .panel { border: 1px solid var(--border); background: var(--panel); }
+  /* Below the breakpoint the fixed viewport height stops making sense —
+     content needs room to stack and the page to scroll normally. */
+  @media (max-width: 1200px) {
+    body { height: auto; min-height: 100vh; }
+    .grid, .grid-2col { min-height: 0; }
+    .panel.grow { flex: none; }
+    .panel.grow .panel-body { max-height: 420px; }
+  }
+
+  .panel {
+    border: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel.grow { flex: 1; }
+  .panel.grow > .panel-body,
+  .panel.grow > .sports-grid { flex: 1; overflow-y: auto; min-height: 0; }
+
+  /* The sidebar's fixed panels will happily consume the whole column and
+     starve the one below them, so they scroll internally instead. */
+  #advisor { max-height: 210px; overflow-y: auto; }
+  #alerts { max-height: 190px; }
   .tabs { display: flex; gap: 2px; margin-left: 14px; }
   .tab {
     font: inherit; font-size: 10px; letter-spacing: .08em;
@@ -105,6 +136,26 @@
   }
   .vig-ok { color: var(--dim); }
   .vig-arb { color: var(--green); font-weight: 700; }
+
+  /* filter chips */
+  .filters {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    padding: 7px 10px; border-bottom: 1px solid var(--line);
+  }
+  .filt {
+    font: inherit; font-size: 9px; letter-spacing: .07em;
+    background: transparent; color: var(--dim);
+    border: 1px solid var(--line); padding: 3px 9px; cursor: pointer;
+  }
+  .filt:hover { color: var(--text); border-color: var(--text-dim); }
+  .filt.on { color: var(--bg); background: var(--green); border-color: var(--green); }
+  .filt .n { opacity: .7; margin-left: 3px; }
+
+  .match a.match-title {
+    color: var(--text); text-decoration: none; display: block;
+  }
+  .match a.match-title:hover { color: var(--green); text-decoration: underline; }
+  .ext { font-size: 8px; color: var(--dim); margin-left: 4px; }
 
   /* news */
   .news-list { max-height: 420px; overflow-y: auto; }
@@ -217,7 +268,10 @@
   .pnl-big { font-size: 22px; font-weight: 700; }
   canvas { width: 100%; height: 110px; display: block; }
 
-  .footer-note { color: var(--text-dim); font-size: 10px; margin-top: 8px; text-align: center; }
+  .footer-note {
+    color: var(--text-dim); font-size: 10px; margin-top: 8px; text-align: center;
+    flex: none;
+  }
 </style>
 </head>
 <body>
@@ -272,7 +326,7 @@
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS CRYPTO</span>
         <i class="info" data-key="news-crypto">i</i></div>
       <div class="panel-body news-list" id="news-crypto"><div class="dim">cargando…</div></div>
@@ -288,7 +342,7 @@
       <div class="panel-body" id="scanner"></div>
     </div>
 
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PAPER POSITIONS</span>
         <i class="info" data-key="positions">i</i></div>
       <div class="panel-body">
@@ -302,7 +356,7 @@
 
   <!-- ============ COL 2: LIVE MARKETS + PNL ============ -->
   <div class="col">
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">LIVE MARKETS</span>
         <i class="info" data-key="markets">i</i>
         <span class="badge" id="mkt-count">WATCHING 0</span></div>
@@ -351,7 +405,7 @@
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PAPER TRADE LOG</span>
         <i class="info" data-key="trades">i</i>
         <span class="badge">TEMPORAL ARB</span></div>
@@ -368,18 +422,25 @@
 <!-- ============ VISTA DEPORTES ============ -->
 <div class="grid-2col" id="view-sports" style="display:none">
   <div class="col">
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
         <i class="info" data-key="news-sports">i</i></div>
       <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
     </div>
   </div>
   <div class="col">
-    <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS DE HOY</span>
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS</span>
         <i class="info" data-key="sports">i</i>
         <span class="badge" id="sports-count">—</span>
         <span class="badge amber" id="sports-age" style="display:none">—</span></div>
+      <div class="filters" id="sports-filters">
+        <button class="filt on" data-f="today">HOY<span class="n"></span></button>
+        <button class="filt" data-f="live">EN VIVO<span class="n"></span></button>
+        <button class="filt" data-f="tomorrow">MAÑANA<span class="n"></span></button>
+        <button class="filt" data-f="featured">DESTACADOS<span class="n"></span></button>
+        <button class="filt" data-f="all">TODOS<span class="n"></span></button>
+      </div>
       <div class="sports-grid" id="sports-grid">
         <div class="dim" style="padding:6px">cargando partidos…</div>
       </div>
@@ -390,7 +451,7 @@
 <!-- ============ VISTA DESTACADOS ============ -->
 <div class="grid-2col" id="view-trending" style="display:none">
   <div class="col">
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
         <i class="info" data-key="news-general">i</i></div>
       <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
@@ -408,11 +469,17 @@
     </div>
   </div>
   <div class="col">
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">SUCESOS DESTACADOS · POLYMARKET</span>
         <i class="info" data-key="trending">i</i>
         <span class="badge" id="trending-count">—</span>
         <span class="badge amber" id="trending-age" style="display:none">—</span></div>
+      <div class="filters" id="trending-filters">
+        <button class="filt on" data-f="all">TODOS<span class="n"></span></button>
+        <button class="filt" data-f="soon">CIERRAN PRONTO<span class="n"></span></button>
+        <button class="filt" data-f="far">A LARGO PLAZO<span class="n"></span></button>
+        <button class="filt" data-f="quirky">ABSURDOS<span class="n"></span></button>
+      </div>
       <div class="sports-grid" id="trending-grid">
         <div class="dim" style="padding:6px">cargando…</div>
       </div>
@@ -441,12 +508,12 @@ const INFO = {
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "PnL acumulado del paper trading. Solo cambia cuando una ventana se resuelve: cada posición paga $1 por share ganadora menos lo invertido. La curva plana significa que hay posiciones abiertas esperando resolución."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
-  "news-crypto": ["NOTICIAS CRYPTO", "Titulares de CoinDesk y Cointelegraph, los más recientes primero. Se refrescan cada 5 minutos — las noticias no se mueven a la velocidad de un order book."],
-  "news-sports": ["NOTICIAS DEPORTES", "Titulares de BBC Sport y ESPN. Contexto para los partidos de la pestaña, no señal de trading."],
-  "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
+  "news-crypto": ["NOTICIAS CRYPTO", "Titulares de CoinDesk y Cointelegraph, los más recientes primero. Traducidos automáticamente al español — pasa el ratón por encima para ver el original en inglés. Se refrescan cada 5 minutos; las noticias no se mueven a la velocidad de un order book."],
+  "news-sports": ["NOTICIAS DEPORTES", "Titulares de BBC Sport y ESPN, traducidos al español (el original aparece al pasar el ratón). Contexto para los partidos de la pestaña, no señal de trading."],
+  "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Traducidos al español; el original en inglés aparece al pasar el ratón. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
   "x-pending": ["X / TWITTER — PENDIENTE", "X cerró su API gratuita en 2023. Para conectar alertas en tiempo real hace falta una cuenta de X Developer con el plan Basic (~$100/mes) y un Bearer Token. Pasos: 1) entrar a developer.x.com y crear un proyecto, 2) suscribirse al plan Basic o superior, 3) generar el Bearer Token en las Keys & Tokens del proyecto, 4) pasar ese token aquí para conectar el feed. Sin eso no hay forma legal de traer datos de X en tiempo real."],
-  trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes, esports. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, no necesariamente los más importantes del evento. Volumen y liquidez son las señales de qué le importa al dinero real en Polymarket."],
-  sports: ["PARTIDOS DE HOY", "Partidos reales de Polymarket que resuelven en las próximas 30 horas. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
+  trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, y el título enlaza al mercado en Polymarket. Filtros: CIERRAN PRONTO son los que resuelven en 7 días o menos; A LARGO PLAZO el resto. ABSURDOS son mercados reales pero peculiares — cuántas veces tuiteará Elon Musk esta semana, qué palabras dirá un CEO en su llamada de resultados, qué dirá MrBeast en su próximo vídeo. Se cuelan aparte porque mueven mucho menos dinero y quedarían enterrados por volumen."],
+  sports: ["PARTIDOS", "Partidos reales de Polymarket que resuelven en las próximas 52 horas. El título enlaza al mercado en Polymarket. Filtros: HOY incluye los que están en juego; EN VIVO solo los que ya empezaron; MAÑANA suele estar vacío de madrugada porque Polymarket publica la jornada unas 24-36h antes; DESTACADOS ordena por volumen negociado. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
 };
@@ -670,9 +737,45 @@ function wholePercents(shares) {
   return out;
 }
 
-function renderSports(data) {
-  const list = data.matches || [];
+let sportsData = [];
+let sportsFilter = "today";
+
+const SPORTS_FILTERS = {
+  today:    m => m.day_bucket === "today" || m.day_bucket === "live",
+  live:     m => m.status === "live",
+  tomorrow: m => m.day_bucket === "tomorrow",
+  featured: m => true,   // ranked by volume below rather than filtered
+  all:      m => true,
+};
+
+const EMPTY_SPORTS = {
+  today: "no hay partidos para hoy con liquidez suficiente",
+  live: "ningún partido en juego ahora mismo",
+  tomorrow: "la jornada de mañana aún no está publicada — Polymarket suele listarla unas 24-36h antes",
+  featured: "sin partidos",
+  all: "sin partidos",
+};
+
+function applySportsFilter() {
+  let list = sportsData.filter(SPORTS_FILTERS[sportsFilter] || (() => true));
+  if (sportsFilter === "featured") {
+    list = [...list].sort((a, b) => (b.volume_24h || 0) - (a.volume_24h || 0)).slice(0, 12);
+  }
   $("sports-count").textContent = list.length + " PARTIDOS";
+  drawMatches(list, EMPTY_SPORTS[sportsFilter]);
+
+  // Show how many fixtures sit behind each chip.
+  document.querySelectorAll("#sports-filters .filt").forEach(b => {
+    const f = b.dataset.f;
+    const n = f === "featured"
+      ? Math.min(sportsData.length, 12)
+      : sportsData.filter(SPORTS_FILTERS[f]).length;
+    b.querySelector(".n").textContent = n ? " " + n : "";
+  });
+}
+
+function renderSports(data) {
+  sportsData = data.matches || [];
 
   // A cached payload is fine, but the age has to be visible.
   const ageEl = $("sports-age");
@@ -682,10 +785,13 @@ function renderSports(data) {
   } else {
     ageEl.style.display = "none";
   }
+  applySportsFilter();
+}
 
+function drawMatches(list, emptyMsg) {
   if (!list.length) {
     $("sports-grid").innerHTML =
-      '<div class="dim" style="padding:6px">no hay partidos con liquidez en las próximas 30h</div>';
+      `<div class="dim" style="padding:6px">${emptyMsg || "sin partidos"}</div>`;
     return;
   }
 
@@ -715,7 +821,8 @@ function renderSports(data) {
         <span class="match-league">${(m.league || m.sport || "").toUpperCase()}</span>
         <span class="match-when${w.live ? " live" : ""}">${w.text}</span>
       </div>
-      <div class="match-title">${m.title}</div>
+      <a class="match-title" href="${m.url}" target="_blank" rel="noopener noreferrer"
+         title="Abrir en Polymarket">${m.title}<span class="ext">↗</span></a>
       ${rows}
       <div class="match-foot">
         <span>liq $${(m.liquidity / 1000).toFixed(0)}K · vol24h $${(m.volume_24h / 1000).toFixed(0)}K</span>
@@ -744,10 +851,13 @@ function renderNews(elId, data) {
     el.innerHTML = '<div class="dim">sin titulares</div>';
     return;
   }
+  // Titles are machine-translated; the English original stays reachable on
+  // hover so a bad translation is never the only thing the reader gets.
   el.innerHTML = list.map(h => `
     <div class="news-item">
-      <a href="${h.link}" target="_blank" rel="noopener noreferrer">${h.title}</a>
-      <span class="news-src">${h.source}</span>
+      <a href="${h.link}" target="_blank" rel="noopener noreferrer"
+         ${h.title_original ? `title="${h.title_original.replace(/"/g, "&quot;")}"` : ""}>${h.title}</a>
+      <span class="news-src">${h.source}${h.title_original ? " · traducido" : ""}</span>
     </div>`).join("");
 }
 
@@ -761,9 +871,36 @@ async function refreshNews(category, elId) {
 }
 
 /* ---------------- destacados / trending ---------------- */
-function renderTrending(data) {
-  const list = data.events || [];
+let trendingData = [];
+let trendingFilter = "all";
+
+const TRENDING_FILTERS = {
+  all:    e => !e.quirky,          // the oddities get their own chip
+  soon:   e => e.horizon === "soon" && !e.quirky,
+  far:    e => e.horizon === "far" && !e.quirky,
+  quirky: e => e.quirky,
+};
+
+const EMPTY_TRENDING = {
+  all: "sin eventos",
+  soon: "ningún evento resuelve en los próximos 7 días",
+  far: "ningún evento a más de 7 días",
+  quirky: "sin mercados absurdos ahora mismo",
+};
+
+function applyTrendingFilter() {
+  const list = trendingData.filter(TRENDING_FILTERS[trendingFilter] || (() => true));
   $("trending-count").textContent = list.length + " EVENTOS";
+  drawTrending(list, EMPTY_TRENDING[trendingFilter]);
+
+  document.querySelectorAll("#trending-filters .filt").forEach(b => {
+    const n = trendingData.filter(TRENDING_FILTERS[b.dataset.f]).length;
+    b.querySelector(".n").textContent = n ? " " + n : "";
+  });
+}
+
+function renderTrending(data) {
+  trendingData = data.events || [];
 
   const ageEl = $("trending-age");
   if (data.age_s != null && data.age_s > 180) {
@@ -772,9 +909,13 @@ function renderTrending(data) {
   } else {
     ageEl.style.display = "none";
   }
+  applyTrendingFilter();
+}
 
+function drawTrending(list, emptyMsg) {
   if (!list.length) {
-    $("trending-grid").innerHTML = '<div class="dim" style="padding:6px">sin eventos</div>';
+    $("trending-grid").innerHTML =
+      `<div class="dim" style="padding:6px">${emptyMsg || "sin eventos"}</div>`;
     return;
   }
 
@@ -797,7 +938,8 @@ function renderTrending(data) {
         <span class="match-league">${(e.category || "").toUpperCase()}</span>
         <span class="match-when">${ends}</span>
       </div>
-      <div class="match-title">${e.title}</div>
+      <a class="match-title" href="${e.url}" target="_blank" rel="noopener noreferrer"
+         title="Abrir en Polymarket">${e.title}<span class="ext">↗</span></a>
       ${rows}
       <div class="match-foot">
         <span>liq $${(e.liquidity / 1000).toFixed(0)}K · vol24h $${(e.volume_24h / 1000).toFixed(0)}K</span>
@@ -815,6 +957,24 @@ async function refreshTrending() {
     $("trending-grid").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
   }
 }
+
+document.querySelectorAll("#sports-filters .filt").forEach(btn => {
+  btn.addEventListener("click", () => {
+    sportsFilter = btn.dataset.f;
+    document.querySelectorAll("#sports-filters .filt")
+      .forEach(b => b.classList.toggle("on", b === btn));
+    applySportsFilter();
+  });
+});
+
+document.querySelectorAll("#trending-filters .filt").forEach(btn => {
+  btn.addEventListener("click", () => {
+    trendingFilter = btn.dataset.f;
+    document.querySelectorAll("#trending-filters .filt")
+      .forEach(b => b.classList.toggle("on", b === btn));
+    applyTrendingFilter();
+  });
+});
 
 const VIEWS = ["crypto", "sports", "trending"];
 document.querySelectorAll(".tab").forEach(btn => {

@@ -44,12 +44,65 @@ FEEDS = {
 }
 
 
+TRANSLATE_URL = "https://api.mymemory.translated.net/get"
+
+# A headline stays in a feed for hours, so the same string would otherwise be
+# re-translated every refresh. Keyed by source text, this keeps the daily call
+# count in the low hundreds instead of the tens of thousands.
+_TRANSLATION_CACHE: dict[str, str] = {}
+_TRANSLATE_LIMIT = asyncio.Semaphore(4)
+
+
 @dataclass
 class Headline:
     title: str
     link: str
     source: str
     published: datetime | None
+    title_original: str | None = None
+
+
+async def _translate(client: httpx.AsyncClient, text: str) -> str:
+    """English headline into Spanish, falling back to the original on failure.
+
+    A missing translation is never worth failing the feed over, so every
+    error path returns the source text unchanged.
+    """
+    if text in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[text]
+
+    try:
+        async with _TRANSLATE_LIMIT:
+            resp = await client.get(
+                TRANSLATE_URL,
+                params={"q": text[:480], "langpair": "en|es"},
+                timeout=8,
+            )
+        resp.raise_for_status()
+        payload = resp.json()
+        translated = (payload.get("responseData") or {}).get("translatedText") or ""
+        # The API echoes the input back on quota exhaustion; treat that as a miss.
+        if not translated or translated.strip().upper() == text.strip().upper():
+            return text
+        _TRANSLATION_CACHE[text] = translated
+        return translated
+    except Exception as exc:
+        log.warning("news.translate_failed", error=str(exc)[:80])
+        return text
+
+
+async def translate_headlines(
+    client: httpx.AsyncClient, headlines: list[Headline]
+) -> list[Headline]:
+    """Translate titles in place, keeping the original for reference."""
+    translations = await asyncio.gather(
+        *(_translate(client, h.title) for h in headlines)
+    )
+    for headline, translated in zip(headlines, translations):
+        if translated != headline.title:
+            headline.title_original = headline.title
+            headline.title = translated
+    return headlines
 
 
 def _parse_date(raw: str) -> datetime | None:
@@ -107,7 +160,10 @@ async def _fetch_one(client: httpx.AsyncClient, source: str, url: str) -> list[H
 
 
 async def fetch_headlines(
-    client: httpx.AsyncClient, category: str, limit: int = 12
+    client: httpx.AsyncClient,
+    category: str,
+    limit: int = 12,
+    translate: bool = True,
 ) -> list[Headline]:
     """Latest headlines for one category, newest first, deduped by title."""
     feeds = FEEDS.get(category, [])
@@ -127,6 +183,9 @@ async def fetch_headlines(
         merged.append(headline)
         if len(merged) >= limit:
             break
+
+    if translate and merged:
+        merged = await translate_headlines(client, merged)
     return merged
 
 
@@ -134,6 +193,7 @@ def to_rows(headlines: list[Headline]) -> list[dict]:
     return [
         {
             "title": h.title,
+            "title_original": h.title_original,
             "link": h.link,
             "source": h.source,
             "published": h.published.isoformat() if h.published else None,
