@@ -62,7 +62,7 @@
      leave dead space at the bottom on a wide desktop. */
   .grid {
     display: grid;
-    grid-template-columns: 250px 1fr 1.15fr 1fr;
+    grid-template-columns: 235px 1fr 1.1fr 1fr 235px;
     gap: 8px;
     align-items: stretch;
     flex: 1;
@@ -74,6 +74,14 @@
     align-items: stretch; flex: 1; min-height: 0;
   }
   @media (max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
+  /* Below this a fifth track would squeeze the trading columns, so news
+     drops to a full-width row underneath rather than disappearing. */
+  @media (max-width: 1500px) {
+    .grid { grid-template-columns: 235px 1fr 1.1fr 1fr; }
+    .col-news { grid-column: 1 / -1; }
+    .col-news .panel.grow { flex: none; }
+    .col-news .news-list { max-height: 260px; }
+  }
   @media (max-width: 1200px) { .grid { grid-template-columns: 250px 1fr 1fr; } .col-3 { display: contents; } }
   @media (max-width: 900px)  { .grid { grid-template-columns: 1fr; } .col { display: flex; } .col-3 { display: flex; } }
 
@@ -158,7 +166,10 @@
   .ext { font-size: 8px; color: var(--dim); margin-left: 4px; }
 
   /* news */
-  .news-list { max-height: 420px; overflow-y: auto; }
+  /* Only cap the list when it is not the panel absorbing the column's
+     slack — inside a .grow panel the flex height must win. */
+  .news-list { overflow-y: auto; }
+  .panel:not(.grow) .news-list { max-height: 420px; }
   .news-item { padding: 6px 2px; border-bottom: 1px solid var(--line); }
   .news-item:last-child { border-bottom: none; }
   .news-item a { color: var(--text); font-size: 10.5px; line-height: 1.4; text-decoration: none; }
@@ -312,7 +323,7 @@
       <div class="panel-body" id="alerts" style="max-height:260px; overflow-y:auto"></div>
     </div>
 
-    <div class="panel">
+    <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">SESIÓN</span>
         <i class="info" data-key="session">i</i></div>
       <div class="panel-body">
@@ -326,11 +337,6 @@
       </div>
     </div>
 
-    <div class="panel grow">
-      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS CRYPTO</span>
-        <i class="info" data-key="news-crypto">i</i></div>
-      <div class="panel-body news-list" id="news-crypto"><div class="dim">cargando…</div></div>
-    </div>
   </div>
 
   <!-- ============ COL 1: SCANNER ============ -->
@@ -417,14 +423,34 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ COL 4: NOTICIAS (altura completa) ============ -->
+  <div class="col col-news">
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS CRYPTO</span>
+        <i class="info" data-key="news-crypto">i</i></div>
+      <div class="filters" id="news-crypto-filters"></div>
+      <div class="panel-body news-list" id="news-crypto"><div class="dim">cargando…</div></div>
+    </div>
+  </div>
 </div>
 
 <!-- ============ VISTA DEPORTES ============ -->
 <div class="grid-2col" id="view-sports" style="display:none">
   <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">SIMULACIÓN: BACKING AL FAVORITO</span>
+        <i class="info" data-key="predictions">i</i>
+        <span class="badge" id="pred-badge">—</span></div>
+      <div class="panel-body" id="pred-stats">
+        <div class="dim">cargando…</div>
+      </div>
+    </div>
+
     <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
         <i class="info" data-key="news-sports">i</i></div>
+      <div class="filters" id="news-sports-filters"></div>
       <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
     </div>
   </div>
@@ -441,8 +467,21 @@
         <button class="filt" data-f="featured">DESTACADOS<span class="n"></span></button>
         <button class="filt" data-f="all">TODOS<span class="n"></span></button>
       </div>
+      <div class="filters" id="sports-disciplines"></div>
       <div class="sports-grid" id="sports-grid">
         <div class="dim" style="padding:6px">cargando partidos…</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">REGISTRO DE PREDICCIONES</span>
+        <i class="info" data-key="pred-log">i</i>
+        <span class="badge" id="pred-log-count">—</span></div>
+      <div class="panel-body" style="max-height:230px; overflow-y:auto">
+        <table>
+          <thead><tr><th>EVENTO</th><th>PICK</th><th>PROB</th><th>COSTE</th><th>RESULTADO</th><th>PNL</th></tr></thead>
+          <tbody id="pred-log"><tr><td colspan="6" class="dim">sin predicciones aún</td></tr></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -454,6 +493,7 @@
     <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
         <i class="info" data-key="news-general">i</i></div>
+      <div class="filters" id="news-general-filters"></div>
       <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
     </div>
     <div class="panel">
@@ -513,6 +553,8 @@ const INFO = {
   "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Traducidos al español; el original en inglés aparece al pasar el ratón. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
   "x-pending": ["X / TWITTER — PENDIENTE", "X cerró su API gratuita en 2023. Para conectar alertas en tiempo real hace falta una cuenta de X Developer con el plan Basic (~$100/mes) y un Bearer Token. Pasos: 1) entrar a developer.x.com y crear un proyecto, 2) suscribirse al plan Basic o superior, 3) generar el Bearer Token en las Keys & Tokens del proyecto, 4) pasar ese token aquí para conectar el feed. Sin eso no hay forma legal de traer datos de X en tiempo real."],
   trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, y el título enlaza al mercado en Polymarket. Filtros: CIERRAN PRONTO son los que resuelven en 7 días o menos; A LARGO PLAZO el resto. ABSURDOS son mercados reales pero peculiares — cuántas veces tuiteará Elon Musk esta semana, qué palabras dirá un CEO en su llamada de resultados, qué dirá MrBeast en su próximo vídeo. Se cuelan aparte porque mueven mucho menos dinero y quedarían enterrados por volumen."],
+  predictions: ["SIMULACIÓN: BACKING AL FAVORITO", "En cada partido apostamos 1 share al resultado que el mercado considera más probable (mínimo 55%), pagando el ask real — no el último precio negociado. Si acierta ganamos (1 − coste); si falla perdemos el coste. La cifra clave no es la tasa de acierto sino su distancia con la ESPERADA POR PRECIO: si el mercado cotiza un favorito a 70¢, debería ganar el 70% de las veces. Si gana menos, los favoritos están sobrevalorados. El backtest sobre 299 ventanas de BTC encontró exactamente eso — apostar contra el favorito en la banda 0.60-0.90 daba +2-4¢ por operación. Esta simulación comprueba si el mismo sesgo aparece en deportes. Cada pick se registra una sola vez y queda grabado en disco, así que el historial no se puede reescribir a posteriori."],
+  "pred-log": ["REGISTRO DE PREDICCIONES", "Cada apuesta simulada con su probabilidad al momento de registrarla, lo que costó el share, y el resultado una vez el partido resolvió. Las abiertas siguen en juego. PNL está en céntimos por share."],
   sports: ["PARTIDOS", "Partidos reales de Polymarket que resuelven en las próximas 52 horas. El título enlaza al mercado en Polymarket. Filtros: HOY incluye los que están en juego; EN VIVO solo los que ya empezaron; MAÑANA suele estar vacío de madrugada porque Polymarket publica la jornada unas 24-36h antes; DESTACADOS ordena por volumen negociado. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
@@ -756,20 +798,42 @@ const EMPTY_SPORTS = {
   all: "sin partidos",
 };
 
+let sportsDiscipline = "all";
+
 function applySportsFilter() {
-  let list = sportsData.filter(SPORTS_FILTERS[sportsFilter] || (() => true));
+  const byTime = sportsData.filter(SPORTS_FILTERS[sportsFilter] || (() => true));
+
+  // Discipline chips are rebuilt from whatever is actually on the slate —
+  // hardcoding them would leave dead buttons whenever a sport is out of season.
+  const counts = {};
+  byTime.forEach(m => {
+    counts[m.discipline] = counts[m.discipline] || { n: 0, label: m.discipline_label };
+    counts[m.discipline].n++;
+  });
+  const ordered = Object.entries(counts).sort((a, b) => b[1].n - a[1].n);
+  if (!(sportsDiscipline in counts)) sportsDiscipline = "all";
+
+  $("sports-disciplines").innerHTML =
+    `<button class="filt${sportsDiscipline === "all" ? " on" : ""}" data-d="all">TODOS<span class="n"> ${byTime.length}</span></button>` +
+    ordered.map(([d, v]) =>
+      `<button class="filt${sportsDiscipline === d ? " on" : ""}" data-d="${d}">${v.label}<span class="n"> ${v.n}</span></button>`
+    ).join("");
+  document.querySelectorAll("#sports-disciplines .filt").forEach(b => {
+    b.addEventListener("click", () => { sportsDiscipline = b.dataset.d; applySportsFilter(); });
+  });
+
+  let list = sportsDiscipline === "all"
+    ? byTime
+    : byTime.filter(m => m.discipline === sportsDiscipline);
   if (sportsFilter === "featured") {
-    list = [...list].sort((a, b) => (b.volume_24h || 0) - (a.volume_24h || 0)).slice(0, 12);
+    list = [...list].sort((a, b) => (b.volume_24h || 0) - (a.volume_24h || 0)).slice(0, 24);
   }
+
   $("sports-count").textContent = list.length + " PARTIDOS";
   drawMatches(list, EMPTY_SPORTS[sportsFilter]);
 
-  // Show how many fixtures sit behind each chip.
   document.querySelectorAll("#sports-filters .filt").forEach(b => {
-    const f = b.dataset.f;
-    const n = f === "featured"
-      ? Math.min(sportsData.length, 12)
-      : sportsData.filter(SPORTS_FILTERS[f]).length;
+    const n = sportsData.filter(SPORTS_FILTERS[b.dataset.f]).length;
     b.querySelector(".n").textContent = n ? " " + n : "";
   });
 }
@@ -861,12 +925,105 @@ function renderNews(elId, data) {
     </div>`).join("");
 }
 
+const newsCache = {};      // category -> headlines
+const newsSource = {};     // category -> selected source, or "all"
+
+function renderNewsFor(category, elId) {
+  const all = newsCache[category] || [];
+  const picked = newsSource[category] || "all";
+
+  const counts = {};
+  all.forEach(h => { counts[h.source] = (counts[h.source] || 0) + 1; });
+
+  const filtersEl = $(elId + "-filters");
+  if (filtersEl) {
+    filtersEl.innerHTML =
+      `<button class="filt${picked === "all" ? " on" : ""}" data-s="all">TODAS<span class="n"> ${all.length}</span></button>` +
+      Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([s, n]) =>
+        `<button class="filt${picked === s ? " on" : ""}" data-s="${s}">${s.toUpperCase()}<span class="n"> ${n}</span></button>`
+      ).join("");
+    filtersEl.querySelectorAll(".filt").forEach(b => {
+      b.addEventListener("click", () => {
+        newsSource[category] = b.dataset.s;
+        renderNewsFor(category, elId);
+      });
+    });
+  }
+
+  const list = picked === "all" ? all : all.filter(h => h.source === picked);
+  renderNews(elId, { headlines: list });
+}
+
 async function refreshNews(category, elId) {
   try {
     const r = await fetch("/api/news?category=" + category);
-    renderNews(elId, await r.json());
+    const data = await r.json();
+    newsCache[category] = data.headlines || [];
+    renderNewsFor(category, elId);
   } catch (e) {
     $(elId).innerHTML = '<div class="dim">no se pudo cargar</div>';
+  }
+}
+
+/* ---------------- simulación: backing al favorito ---------------- */
+function renderPredictions(data) {
+  const s = data.stats || {};
+  $("pred-badge").textContent = s.resolved
+    ? s.resolved + " RESUELTAS"
+    : (s.pending || 0) + " ABIERTAS";
+
+  const hit = s.hit_rate == null ? null : s.hit_rate * 100;
+  const exp = s.expected_hit_rate == null ? null : s.expected_hit_rate * 100;
+  const pnlCls = (s.pnl || 0) > 0 ? "up" : (s.pnl || 0) < 0 ? "down" : "dim";
+
+  // The gap between realised and expected hit rate is the whole experiment:
+  // if favourites win less often than their price implies, they are overpriced.
+  let verdict = '<span class="dim">sin resolver aún — hacen falta decenas de partidos</span>';
+  if (s.resolved >= 10 && hit != null && exp != null) {
+    const diff = hit - exp;
+    verdict = Math.abs(diff) < 2
+      ? `<span class="dim">el favorito gana casi exactamente lo que el mercado predice (${diff >= 0 ? "+" : ""}${diff.toFixed(1)} pts)</span>`
+      : diff < 0
+        ? `<span class="amber">el favorito gana ${Math.abs(diff).toFixed(1)} pts MENOS de lo que cotiza — coherente con el sesgo del favorito</span>`
+        : `<span class="up">el favorito gana ${diff.toFixed(1)} pts MÁS de lo que cotiza</span>`;
+  }
+
+  $("pred-stats").innerHTML = `
+    <div class="sstat"><span>apuestas resueltas</span><b>${s.resolved || 0}</b></div>
+    <div class="sstat"><span>abiertas</span><b class="amber">${s.pending || 0}</b></div>
+    <div class="sstat"><span>aciertos</span><b class="up">${s.wins || 0}</b></div>
+    <div class="sstat"><span>fallos</span><b class="down">${s.losses || 0}</b></div>
+    <div class="sstat"><span>tasa de acierto</span><b>${hit == null ? "—" : hit.toFixed(1) + "%"}</b></div>
+    <div class="sstat"><span>esperada por precio</span><b class="cyan">${exp == null ? "—" : exp.toFixed(1) + "%"}</b></div>
+    <div class="sstat"><span>PnL (1 share/pick)</span><b class="${pnlCls}">${(s.pnl || 0) >= 0 ? "+" : ""}$${(s.pnl || 0).toFixed(2)}</b></div>
+    <div class="sstat"><span>ROI</span><b class="${pnlCls}">${s.roi == null ? "—" : (s.roi * 100).toFixed(1) + "%"}</b></div>
+    <div style="margin-top:8px; line-height:1.45; font-size:10px">${verdict}</div>`;
+
+  const rows = data.recent || [];
+  $("pred-log-count").textContent = rows.length + " PICKS";
+  $("pred-log").innerHTML = rows.length ? rows.map(p => {
+    const res = !p.resolved
+      ? '<span class="amber">abierta</span>'
+      : p.won ? '<span class="up">ACIERTO</span>' : '<span class="down">fallo</span>';
+    const pnl = !p.resolved ? '<span class="dim">—</span>'
+      : `<span class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : ""}${(p.pnl * 100).toFixed(0)}¢</span>`;
+    return `<tr>
+      <td><a href="${p.url}" target="_blank" rel="noopener noreferrer"
+             style="color:inherit">${p.title.slice(0, 40)}</a></td>
+      <td>${p.pick.slice(0, 18)}</td>
+      <td class="dim">${Math.round(p.pick_prob * 100)}%</td>
+      <td class="dim">${Math.round(p.pick_ask * 100)}¢</td>
+      <td>${res}</td><td>${pnl}</td></tr>`;
+  }).join("") : '<tr><td colspan="6" class="dim">sin predicciones aún</td></tr>';
+}
+
+async function refreshPredictions() {
+  if (currentView !== "sports") return;
+  try {
+    const r = await fetch("/api/predictions");
+    renderPredictions(await r.json());
+  } catch (e) {
+    $("pred-stats").innerHTML = '<div class="dim">no se pudo cargar</div>';
   }
 }
 
@@ -983,7 +1140,9 @@ document.querySelectorAll(".tab").forEach(btn => {
     document.querySelectorAll(".tab").forEach(b =>
       b.classList.toggle("active", b === btn));
     VIEWS.forEach(v => { $("view-" + v).style.display = v === currentView ? "" : "none"; });
-    if (currentView === "sports") { refreshSports(); refreshNews("sports", "news-sports"); }
+    if (currentView === "sports") {
+      refreshSports(); refreshNews("sports", "news-sports"); refreshPredictions();
+    }
     if (currentView === "trending") { refreshTrending(); refreshNews("general", "news-general"); }
   });
 });
@@ -994,6 +1153,7 @@ refreshNews("crypto", "news-crypto");
 setInterval(refresh, 3000);
 setInterval(refreshSports, 30000);
 setInterval(refreshTrending, 60000);
+setInterval(refreshPredictions, 30000);
 setInterval(() => {
   refreshNews("crypto", "news-crypto");
   if (currentView === "sports") refreshNews("sports", "news-sports");

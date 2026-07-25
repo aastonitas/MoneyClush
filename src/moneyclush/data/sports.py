@@ -23,6 +23,7 @@ than the match result, so they are skipped here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -39,6 +40,59 @@ UA_HEADERS = {"User-Agent": "Mozilla/5.0"}
 # Cost of crossing the spread on every leg of a multi-outcome basket.
 # Wider than the two-leg BTC figure because a 1X2 basket needs three fills.
 BASKET_COST = 0.025
+
+# Gamma labels each fixture with a league code (`mex`, `atp`, `cs2`). Rolling
+# them up into disciplines is what makes a "solo tenis" filter possible.
+DISCIPLINE_BY_TAG = {
+    "soccer": "futbol",
+    "tennis": "tenis",
+    "baseball": "beisbol",
+    "basketball": "basket",
+    "cricket": "cricket",
+    "ufc": "mma",
+    "american football": "futbol-americano",
+}
+ESPORT_CODES = {"cs2", "lol", "val", "dota2", "mlbb", "hok", "rl", "ow2"}
+DISCIPLINE_BY_CODE = {
+    "mlb": "beisbol", "kbo": "beisbol", "npb": "beisbol",
+    "atp": "tenis", "wta": "tenis", "itf": "tenis", "atp-doubles": "tenis",
+    "ufc": "mma",
+    "wnba": "basket", "nba": "basket",
+    "cfl": "futbol-americano", "nfl": "futbol-americano",
+    "nhl": "hockey",
+}
+
+DISCIPLINE_LABELS = {
+    "futbol": "FÚTBOL",
+    "esports": "ESPORTS",
+    "tenis": "TENIS",
+    "beisbol": "BÉISBOL",
+    "mma": "UFC/MMA",
+    "basket": "BASKET",
+    "cricket": "CRICKET",
+    "hockey": "HOCKEY",
+    "futbol-americano": "F. AMERICANO",
+    "otros": "OTROS",
+}
+
+
+def classify_discipline(sport_code: str, tags: list[str]) -> str:
+    """Roll a league code and its tags up into a broad discipline."""
+    code = (sport_code or "").lower()
+    if code in ESPORT_CODES:
+        return "esports"
+    if code in DISCIPLINE_BY_CODE:
+        return DISCIPLINE_BY_CODE[code]
+
+    lowered = {t.lower() for t in tags}
+    if "esports" in lowered:
+        return "esports"
+    if "ufc" in lowered or "mma" in lowered or "boxing" in lowered:
+        return "mma"
+    for tag, discipline in DISCIPLINE_BY_TAG.items():
+        if tag in lowered:
+            return discipline
+    return "otros"
 
 
 @dataclass
@@ -68,6 +122,7 @@ class Match:
     slug: str
     sport: str
     league: str
+    discipline: str
     shape: str                     # "1x2" (separate markets) | "moneyline" (one market)
     start_time: datetime | None
     end_time: datetime | None
@@ -130,6 +185,14 @@ class Match:
     @property
     def url(self) -> str:
         return f"https://polymarket.com/event/{self.slug}"
+
+    def favourite(self) -> tuple[Outcome, float] | None:
+        """The outcome the market rates most likely, with its normalised
+        probability. This is what the favourite-backing simulation bets on."""
+        ranked = self.normalised()
+        if not ranked:
+            return None
+        return max(ranked, key=lambda pair: pair[1])
 
     @property
     def day_bucket(self) -> str:
@@ -247,21 +310,27 @@ def _outcomes_from_1x2(markets: list[dict], teams: list[str]) -> list[Outcome]:
 
 
 def _outcomes_from_moneyline(markets: list[dict], teams: list[str]) -> list[Outcome]:
-    """Esports shape: a single `Match Winner` market holding both sides.
+    """Single market holding both sides as complementary tokens.
 
-    The two tokens are complements of one another, so the second side's
-    ask is `1 - bid` of the first. Their sum is therefore always $1 plus
-    the spread — no arbitrage is possible within one market, only across
-    separate ones.
+    The title of that market is not consistent across sports — esports
+    call it `Match Winner`, a UFC card names the fight itself, and MLB
+    leaves it null. What *is* consistent is that its two outcomes are the
+    two competitors, so that is what identifies it.
+
+    The tokens are complements, so the second side's ask is `1 - bid` of
+    the first. Their sum is always $1 plus the spread — no arbitrage is
+    possible within one market, only across separate ones.
     """
+    wanted = {t.strip().lower() for t in teams}
+
     for m in markets:
         if m.get("closed") or not m.get("active"):
-            continue
-        if (m.get("groupItemTitle") or "").strip().lower() != "match winner":
             continue
 
         names = [str(o) for o in _loads(m.get("outcomes"), [])]
         if len(names) != 2:
+            continue
+        if {n.strip().lower() for n in names} != wanted:
             continue
 
         prices = _loads(m.get("outcomePrices"), [])
@@ -308,12 +377,17 @@ def _build_match(event: dict) -> Match | None:
     outcomes.sort(key=lambda o: order.get(o.kind, 9))
 
     tags = [t.get("label", "") for t in (event.get("tags") or [])]
+    # "Soccer" and "baseball" name the sport, not the competition. Skipping
+    # them is what lets "Chinese Super League" or "OFB Cup" show instead.
+    generic = {
+        "Sports", "Games", "Recurring", "Hide From New", "Esports",
+        "Soccer", "baseball", "basketball", "Tennis", "Cricket",
+        "american football", "hockey",
+    }
     league = next(
-        (
-            t for t in tags
-            if t not in ("Sports", "Games", "Recurring", "Hide From New", "Esports")
-        ),
-        event.get("seriesSlug") or "",
+        (t for t in tags if t not in generic),
+        next((t for t in tags if t not in {"Sports", "Games", "Recurring",
+                                           "Hide From New"}), ""),
     )
 
     sport = event.get("sport")
@@ -325,6 +399,7 @@ def _build_match(event: dict) -> Match | None:
         slug=event.get("slug", ""),
         sport=sport_name or ("soccer" if "Soccer" in tags else "sports"),
         league=league,
+        discipline=classify_discipline(sport_name, tags),
         shape=shape,
         start_time=_parse_dt(event.get("startTime") or event.get("eventDate")),
         end_time=_parse_dt(event.get("endDate")),
@@ -334,45 +409,72 @@ def _build_match(event: dict) -> Match | None:
     )
 
 
-async def fetch_todays_matches(
-    client: httpx.AsyncClient,
-    hours_ahead: int = 52,
-    min_liquidity: float = 1000.0,
-    limit: int = 500,
-) -> list[Match]:
-    """Sports fixtures resolving within `hours_ahead`, richest book first."""
-    horizon = datetime.now(timezone.utc) + timedelta(hours=hours_ahead)
-
+async def _fetch_page(
+    client: httpx.AsyncClient, offset: int, size: int, horizon: str
+) -> list[dict]:
     resp = await client.get(
         GAMMA_EVENTS,
         params={
             "closed": "false",
             "active": "true",
-            "limit": limit,
-            "end_date_max": horizon.isoformat(),
+            "limit": size,
+            "offset": offset,
+            "end_date_max": horizon,
             "order": "volume24hr",
             "ascending": "false",
         },
         headers=UA_HEADERS,
     )
     resp.raise_for_status()
+    return resp.json()
+
+
+async def fetch_todays_matches(
+    client: httpx.AsyncClient,
+    hours_ahead: int = 52,
+    min_liquidity: float = 1000.0,
+    pages: int = 8,
+    page_size: int = 100,
+) -> list[Match]:
+    """Sports fixtures resolving within `hours_ahead`, richest book first.
+
+    Results are ordered by volume across the whole of Polymarket, so a
+    single page is mostly politics and crypto with a handful of fixtures
+    at the top. Reading several pages is what surfaces the leagues that
+    trade quietly — Guatemalan football, Korean baseball, ITF tennis.
+    """
+    horizon = (datetime.now(timezone.utc) + timedelta(hours=hours_ahead)).isoformat()
+
+    pages_data = await asyncio.gather(
+        *(_fetch_page(client, i * page_size, page_size, horizon) for i in range(pages)),
+        return_exceptions=True,
+    )
 
     matches: list[Match] = []
-    for event in resp.json():
-        # Spreads and totals live on their own event; skip them.
-        if event.get("slug", "").endswith("-more-markets"):
+    seen: set[str] = set()
+    for page in pages_data:
+        if isinstance(page, BaseException):
             continue
+        for event in page:
+            # Spreads and totals live on their own event; skip them.
+            if event.get("slug", "").endswith("-more-markets"):
+                continue
 
-        tags = {t.get("label", "") for t in (event.get("tags") or [])}
-        if "Sports" not in tags and "Esports" not in tags:
-            continue
+            event_id = str(event.get("id"))
+            if event_id in seen:
+                continue
 
-        match = _build_match(event)
-        if not match or match.liquidity < min_liquidity:
-            continue
-        if match.status == "ended":
-            continue
-        matches.append(match)
+            tags = {t.get("label", "") for t in (event.get("tags") or [])}
+            if "Sports" not in tags and "Esports" not in tags:
+                continue
+
+            match = _build_match(event)
+            if not match or match.liquidity < min_liquidity:
+                continue
+            if match.status == "ended":
+                continue
+            seen.add(event_id)
+            matches.append(match)
 
     # Kick-off order: what is starting soonest is what matters.
     matches.sort(
@@ -397,6 +499,8 @@ def to_rows(matches: list[Match]) -> list[dict]:
                 "url": m.url,
                 "league": m.league,
                 "sport": m.sport,
+                "discipline": m.discipline,
+                "discipline_label": DISCIPLINE_LABELS.get(m.discipline, "OTROS"),
                 "shape": m.shape,
                 "status": m.status,
                 "day_bucket": m.day_bucket,

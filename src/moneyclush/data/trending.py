@@ -159,10 +159,10 @@ async def _fetch_page(client: httpx.AsyncClient, offset: int, size: int) -> list
 
 async def fetch_trending(
     client: httpx.AsyncClient,
-    limit: int = 24,
-    min_volume: float = 50_000.0,
-    quirky_min_volume: float = 2_000.0,
-    pages: int = 4,
+    limit: int = 48,
+    min_volume: float = 20_000.0,
+    quirky_min_volume: float = 1_000.0,
+    pages: int = 8,
     page_size: int = 100,
 ) -> list[TrendingEvent]:
     """Top events by 24h volume, plus the oddities further down the list.

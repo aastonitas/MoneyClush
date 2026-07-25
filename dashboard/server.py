@@ -32,6 +32,7 @@ from moneyclush.data.consensus_price import ConsensusFeed
 from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
 from moneyclush.data.news import fetch_headlines
 from moneyclush.data.news import to_rows as news_to_rows
+from moneyclush.data.predictions import PredictionLedger
 from moneyclush.data.sports import fetch_todays_matches, to_rows
 from moneyclush.data.trending import fetch_trending
 from moneyclush.data.trending import to_rows as trending_to_rows
@@ -114,6 +115,12 @@ NEWS_CACHE: dict[str, dict] = {
 }
 TRENDING_TTL = 120.0
 TRENDING_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
+
+# Favourite-backing ledger. Only fixtures the market rates at 55%+ are
+# picked: below that there is no meaningful favourite to back.
+PREDICTIONS = PredictionLedger(path=DATA_DIR / "predictions.jsonl")
+PREDICTION_MIN_PROB = 0.55
+PREDICTION_INTERVAL = 120.0
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
 
 
@@ -622,10 +629,44 @@ async def poll_loop() -> None:
             await asyncio.sleep(3)
 
 
+async def prediction_loop() -> None:
+    """Back the favourite on new fixtures, then settle the ones that ended.
+
+    Runs on its own slow cadence: fixtures appear over hours and resolve
+    over hours, so tying this to the 3-second market loop would burn
+    requests for nothing.
+    """
+    PREDICTIONS.load()
+    log.info("predictions.loaded", total=len(PREDICTIONS.predictions))
+
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                matches = await fetch_todays_matches(client)
+                added = PREDICTIONS.record(matches, min_prob=PREDICTION_MIN_PROB)
+                settled = await PREDICTIONS.resolve(client)
+
+            if added or settled:
+                log.info("predictions.tick", added=added, settled=settled)
+            if settled:
+                stats = PREDICTIONS.stats()
+                add_alert(
+                    "info",
+                    f"{settled} predicción(es) resueltas · acierto "
+                    f"{(stats['hit_rate'] or 0) * 100:.0f}% "
+                    f"({stats['wins']}/{stats['resolved']})",
+                )
+        except Exception as exc:
+            log.warning("predictions.loop_failed", error=str(exc)[:120])
+
+        await asyncio.sleep(PREDICTION_INTERVAL)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     clob_ws.start()
     asyncio.create_task(poll_loop())
+    asyncio.create_task(prediction_loop())
 
 
 @app.on_event("shutdown")
@@ -733,6 +774,18 @@ async def get_trending() -> JSONResponse:
                 "error": TRENDING_CACHE["error"],
             }
         )
+
+
+@app.get("/api/predictions")
+async def get_predictions() -> JSONResponse:
+    """Favourite-backing ledger: settled record plus what is still open."""
+    return JSONResponse(
+        {
+            "stats": PREDICTIONS.stats(),
+            "recent": PREDICTIONS.recent(60),
+            "min_prob": PREDICTION_MIN_PROB,
+        }
+    )
 
 
 @app.get("/")
