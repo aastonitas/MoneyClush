@@ -52,7 +52,11 @@
   .spacer { flex: 1; }
   .h-bot { display: flex; align-items: center; gap: 6px; }
   .h-bot-label { font-size: 9px; color: var(--dim); letter-spacing: .06em; }
-  #h-bot-spark { display: block; }
+  /* The generic `canvas` rule below stretches every canvas to 100% wide by
+     110px tall — right for the PnL chart, but it also caught this one and
+     blew the header up to three lines to fit it. Pin it back to its
+     drawing-buffer size so it sits inline at header height. */
+  #h-bot-spark { display: block; width: 70px; height: 16px; }
   .mode-chip {
     border: 1px solid var(--amber); color: var(--amber);
     padding: 2px 8px; font-size: 10px; letter-spacing: 1px;
@@ -364,7 +368,7 @@
   </div>
   <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
     <span class="h-bot-label">BOT</span>
-    <canvas id="h-bot-spark" width="70" height="20"></canvas>
+    <canvas id="h-bot-spark" width="70" height="16"></canvas>
     <b id="h-bot-pnl" class="dim">$0.00</b>
   </div>
   <div class="spacer"></div>
