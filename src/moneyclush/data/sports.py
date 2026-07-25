@@ -173,6 +173,32 @@ class Match:
             return [(o, 0.0) for o in self.outcomes]
         return [(o, p / total) for o, p in priced]
 
+    def fair_probabilities(self) -> list[tuple[Outcome, float]]:
+        """De-vigged probabilities from mid prices, not from last trades.
+
+        Mid is what the book says right now. Last-traded is what somebody
+        paid at some point in the past, and on a quiet fixture that can be
+        hours stale — stale enough to name the wrong favourite. Since the
+        favourite-backing ledger picks a side from this number, using the
+        last trade means occasionally betting against the current market.
+
+        Mid also sits half a spread below the ask, which is what makes it
+        the right baseline for calibration: comparing a realised hit rate
+        against the ask charges the spread to the market's forecast.
+
+        Falls back to last-traded normalisation when any outcome is
+        missing a quote, rather than mixing the two inside one book.
+        """
+        mids: list[tuple[Outcome, float]] = []
+        for o in self.outcomes:
+            if o.best_bid is None or o.best_ask is None:
+                return self.normalised()
+            mids.append((o, (o.best_bid + o.best_ask) / 2.0))
+        total = sum(m for _, m in mids)
+        if total <= 0:
+            return self.normalised()
+        return [(o, m / total) for o, m in mids]
+
     @property
     def decided(self) -> bool:
         """Whether the market has already settled the result in practice.
@@ -182,7 +208,7 @@ class Match:
         hours ago still looks live by the clock. The price does not lie —
         once a side trades at 97c+ the outcome is no longer in question.
         """
-        top = max((p for _, p in self.normalised()), default=0.0)
+        top = max((p for _, p in self.fair_probabilities()), default=0.0)
         return top >= 0.97
 
     @property
@@ -202,9 +228,9 @@ class Match:
         return f"https://polymarket.com/event/{self.slug}"
 
     def favourite(self) -> tuple[Outcome, float] | None:
-        """The outcome the market rates most likely, with its normalised
+        """The outcome the market rates most likely, with its de-vigged
         probability. This is what the favourite-backing simulation bets on."""
-        ranked = self.normalised()
+        ranked = self.fair_probabilities()
         if not ranked:
             return None
         return max(ranked, key=lambda pair: pair[1])
@@ -507,7 +533,8 @@ def to_rows(matches: list[Match]) -> list[dict]:
     """Flatten matches for the dashboard."""
     rows = []
     for m in matches:
-        normalised = {id(o): p for o, p in m.normalised()}
+        # The probability on screen is the same one the ledger bets on.
+        normalised = {id(o): p for o, p in m.fair_probabilities()}
         rows.append(
             {
                 "id": m.event_id,

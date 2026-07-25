@@ -97,6 +97,13 @@ STATE: dict = {
     "status": "starting",
     "poll_count": 0,
     "errors": 0,
+    # Failures inside the per-market pricing block. Kept separate from
+    # `errors` because a bug there used to be indistinguishable from a
+    # quiet market: both produce an empty scanner and no fills.
+    "pricing_errors": 0,
+    "last_pricing_error": None,
+    "btc_source": "okx",
+    "storage": {"state": "unknown", "reason": "sin comprobar todavía"},
 }
 
 fv_engine = FairValueEngine()
@@ -154,6 +161,34 @@ STANDINGS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
 
 
+def _as_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _favourite_mid(book_up, book_down, side: OutcomeSide) -> float | None:
+    """The market's own probability for the backed side, de-vigged.
+
+    Up and Down are complementary tokens, so their mids already sum to
+    about $1; normalising by the total removes whatever is left over and
+    makes the number a probability rather than a price.
+
+    Returns None when either book is one-sided, in which case there is no
+    mid to speak of and the calibration falls back to the ask.
+    """
+    mids = []
+    for book in (book_up, book_down):
+        if book.best_bid is None or book.best_ask is None:
+            return None
+        mids.append((book.best_bid + book.best_ask) / 2.0)
+    total = mids[0] + mids[1]
+    if total <= 0:
+        return None
+    return (mids[0] if side == OutcomeSide.UP else mids[1]) / total
+
+
 def add_alert(level: str, text: str) -> None:
     """level: edge | fill | resolve | warn | info"""
     STATE["alerts"].insert(0, {
@@ -192,12 +227,22 @@ async def fetch_book(client: httpx.AsyncClient, token_id: str) -> OrderBookSnaps
     )
 
 
-async def fetch_spot_prices(client: httpx.AsyncClient) -> dict[str, float]:
+async def fetch_spot_prices(client: httpx.AsyncClient) -> tuple[dict[str, float], dict[str, str]]:
     """Spot prices from OKX (primary) with Coinbase fallback.
 
     Binance is geo-blocked (HTTP 451) from this location.
+
+    Returns the prices *and where each one came from*, because the source
+    is not an implementation detail here. The opening price always comes
+    from OKX 1m candles, and the model prices the distance between the
+    two. OKX quotes USDT and Coinbase quotes USD, a basis of roughly 10
+    bps — four times the per-minute volatility the signal is made of. The
+    basis cancels only while both ends of the subtraction share a venue,
+    so a silent failover turns a working model into a random one. The
+    caller uses this to stop pricing rather than to price badly.
     """
-    out = {}
+    out: dict[str, float] = {}
+    sources: dict[str, str] = {}
     for inst, cb_pair, key in [
         ("BTC-USDT", "BTC-USD", "btc_price"),
         ("ETH-USDT", "ETH-USD", "eth_price"),
@@ -207,19 +252,21 @@ async def fetch_spot_prices(client: httpx.AsyncClient) -> dict[str, float]:
         try:
             r = await client.get(OKX_URL, params={"instId": inst})
             out[key] = float(r.json()["data"][0]["last"])
+            sources[key] = "okx"
         except Exception:
             try:
                 r = await client.get(f"{COINBASE_URL}/{cb_pair}/spot")
                 out[key] = float(r.json()["data"]["amount"])
+                sources[key] = "coinbase"
             except Exception:
                 out[key] = STATE.get(key, 0.0)
-    return out
+                sources[key] = "stale"
+    return out, sources
 
 
 def build_advisor(scanner_rows: list[dict], market_rows: list[dict]) -> list[dict]:
     """Rule-based contextual tips about the current market state."""
     tips: list[dict] = []
-    stats = STATE["stats"]
 
     edges = [r for r in scanner_rows if r["signal"] == "EDGE"]
     if edges:
@@ -291,22 +338,25 @@ def build_advisor(scanner_rows: list[dict], market_rows: list[dict]) -> list[dic
                     f"a tamaño real. Evitar o reducir block size.",
         })
 
-    if stats["resolved"] >= 5:
-        wr = stats["win_rate"] * 100
-        if wr < 50:
-            tips.append({
-                "icon": "%",
-                "kind": "warn",
-                "text": f"Win rate {wr:.0f}% en {stats['resolved']} resoluciones — revisar "
-                        f"si el fair value está mal calibrado antes de subir tamaño.",
-            })
-        else:
-            tips.append({
-                "icon": "%",
-                "kind": "ok",
-                "text": f"Win rate {wr:.0f}% en {stats['resolved']} resoluciones. "
-                        f"Aún poca muestra: esperar 30+ antes de sacar conclusiones.",
-            })
+    # The favourite track is the live version of the open question from the
+    # backtest, so its reading belongs here — with the sample size attached,
+    # because a 9-point gap over 30 bets is noise wearing a result's clothes.
+    fav = STATE.get("fav_stats") or {}
+    if fav.get("resolved"):
+        tips.append({
+            "icon": "%",
+            "kind": "warn" if fav.get("significant") else "ok",
+            "text": f"Backing al favorito ({fav['resolved']} resueltas): "
+                    f"{fav.get('verdict', '')}",
+        })
+
+    storage = STATE.get("storage") or {}
+    if storage.get("state") == "ephemeral":
+        tips.insert(0, {
+            "icon": "!",
+            "kind": "warn",
+            "text": f"Los datos NO persisten. {storage.get('reason', '')}",
+        })
 
     tips.append({
         "icon": "»",
@@ -353,7 +403,7 @@ async def poll_loop() -> None:
                     await calibrate_from_candles(client)
                     last_calibration = time.time()
 
-                spots = await fetch_spot_prices(client)
+                spots, spot_sources = await fetch_spot_prices(client)
                 STATE.update(spots)
                 now_ms = int(time.time() * 1000)
 
@@ -363,7 +413,14 @@ async def poll_loop() -> None:
                 STATE["dispersion_bps"] = (
                     round(btc_dispersion, 2) if btc_dispersion != float("inf") else None
                 )
-                data_trusted = btc_dispersion <= MAX_DISPERSION_BPS
+                # The opening price is an OKX candle, so the current tick has
+                # to be OKX too or the USDT/USD basis stops cancelling and
+                # swamps the signal. A fallback quote is better than no price
+                # on screen, but it is not something to price a market with.
+                btc_source = spot_sources.get("btc_price", "stale")
+                STATE["btc_source"] = btc_source
+                same_venue = btc_source == "okx"
+                data_trusted = btc_dispersion <= MAX_DISPERSION_BPS and same_venue
 
                 markets = await discover_active_markets(
                     client, assets=["BTC", "ETH", "SOL", "XRP"], durations=["5m", "15m"]
@@ -403,9 +460,14 @@ async def poll_loop() -> None:
                         "seconds_remaining": round(mk.seconds_remaining),
                         "spot": spot,
                         "opening": opening,
+                        "price_source": spot_sources.get(spot_key, "stale"),
                     }
 
-                    if mk.asset == "BTC" and opening is not None:
+                    # Pricing needs the tick and the opening candle to share a
+                    # venue; on a failover the honest move is to show the market
+                    # unpriced rather than to print a fair value built on a
+                    # 10 bps basis error.
+                    if mk.asset == "BTC" and opening is not None and same_venue:
                         try:
                             # Live books when the socket is current; REST only
                             # as a fallback while it connects or reconnects.
@@ -479,15 +541,27 @@ async def poll_loop() -> None:
                                     OutcomeSide.UP if up_ask > down_ask else OutcomeSide.DOWN
                                 )
                                 price = max(up_ask, down_ask)
+                                # The ask is what the bet costs; the mid is
+                                # what the market actually thinks. Scoring the
+                                # forecast against the ask charges it half a
+                                # spread and invents a deficit the same size as
+                                # the effect being measured, so both are kept.
+                                mid = _favourite_mid(book_up, book_down, side)
                                 if FAV_MIN_PRICE <= price <= FAV_MAX_PRICE:
-                                    fav_positions[cid] = {
-                                        "side": side,
+                                    bet = {
+                                        "side": side.value,
                                         "price": price,
+                                        "mid": mid,
                                         "market": f"{mk.asset} {mk.duration}",
                                         "opening": opening,
                                         "window_end": mk.window_end_epoch,
                                         "asset": mk.asset,
                                     }
+                                    fav_positions[cid] = bet
+                                    # Held only in memory until now, so every
+                                    # restart quietly dropped whatever was in
+                                    # flight and the curve lost those windows.
+                                    store.save_open_fav(cid, bet)
 
                             row.update({
                                 "best_bid_up": book_up.best_bid,
@@ -596,8 +670,23 @@ async def poll_loop() -> None:
                                         "reason": signal.reason[:40],
                                     })
                                     STATE["paper_trades"] = STATE["paper_trades"][:30]
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # This block holds fair value, arbitrage detection,
+                            # the favourite track and paper trading. Swallowing
+                            # it silently meant any bug in ~190 lines showed up
+                            # as nothing happening, which is also what a
+                            # correctly quiet market looks like.
+                            STATE["pricing_errors"] += 1
+                            STATE["last_pricing_error"] = (
+                                f"{type(exc).__name__}: {exc}"[:140]
+                            )
+                            log.warning(
+                                "poll.market_failed",
+                                slug=mk.slug,
+                                error=str(exc)[:160],
+                                exc_info=True,
+                            )
+                            row["error"] = type(exc).__name__
 
                     market_rows.append(row)
 
@@ -615,23 +704,25 @@ async def poll_loop() -> None:
 
                     fav_positions.pop(cid)
                     fav_settled.add(cid)
+                    store.drop_open_fav(cid)
 
                     winner = (
                         OutcomeSide.UP
                         if final_spot >= bet["opening"]
                         else OutcomeSide.DOWN
                     )
-                    won = winner == bet["side"]
+                    won = winner.value == bet["side"]
                     # $1 stake buys 1/price shares, each settling at $1.
                     pnl = (1.0 / bet["price"] - 1.0) if won else -1.0
 
                     store.save_fav_bet(
                         settled_at=int(now_s * 1000),
                         market=bet["market"],
-                        side=bet["side"].value,
+                        side=bet["side"],
                         price=bet["price"],
                         won=won,
                         pnl=pnl,
+                        mid=bet.get("mid"),
                     )
                     # Rebuild from the database so the curve reflects every
                     # bet ever settled, not just this process's lifetime.
@@ -641,7 +732,7 @@ async def poll_loop() -> None:
                     STATE["paper_trades"].insert(0, {
                         "ts": int(now_s * 1000),
                         "market": bet["market"],
-                        "side": f"FAV {bet['side'].value.upper()}",
+                        "side": f"FAV {bet['side'].upper()}",
                         "price": round(bet["price"], 4),
                         "size": 1.0,
                         "reason": f"{'ACIERTO' if won else 'fallo'} "
@@ -732,6 +823,7 @@ async def poll_loop() -> None:
                     "fills": STATE["stats"]["fills"],
                     "fav_open": len(fav_positions),
                 }
+                STATE["storage"] = store.storage_status()
                 STATE["storage_durable"] = store.storage_is_durable()
 
                 scanner_rows.sort(key=lambda r: r["edge"], reverse=True)
@@ -784,9 +876,8 @@ async def prediction_loop() -> None:
                 stats = PREDICTIONS.stats("ia")
                 add_alert(
                     "info",
-                    f"{settled} predicción(es) resueltas · acierto "
-                    f"{(stats['hit_rate'] or 0) * 100:.0f}% "
-                    f"({stats['wins']}/{stats['resolved']})",
+                    f"{settled} predicción(es) resueltas · "
+                    f"{stats['wins']}/{stats['resolved']} · {stats['verdict']}",
                 )
         except Exception as exc:
             log.warning("predictions.loop_failed", error=str(exc)[:120])
@@ -796,17 +887,30 @@ async def prediction_loop() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    # Whether the data is safe is a measurement, not a configuration flag:
+    # setting MONEYCLUSH_DB without mounting a volume gives a perfectly
+    # writable directory that vanishes at the next deploy.
+    status = store.record_boot()
+    STATE["storage"] = status
+    STATE["storage_durable"] = status["state"] == "durable"
+
     # Restore the favourite track so a redeploy does not reset the curve.
     STATE["fav_curve"], STATE["fav_stats"] = store.load_fav_history()
     STATE["fav_pnl"] = round(store.fav_pnl(), 4)
-    STATE["storage_durable"] = store.storage_is_durable()
-    if not store.storage_is_durable():
-        log.warning("store.ephemeral", path=str(store.db_path()))
-        add_alert(
-            "warn",
-            "Almacenamiento efímero: define MONEYCLUSH_DB en un volumen o "
-            "los datos se borrarán en el próximo despliegue.",
-        )
+
+    # Bets that were still open when the process last stopped. Windows
+    # that closed in the meantime settle on the next poll.
+    fav_positions.update(store.load_open_favs())
+    if fav_positions:
+        log.info("fav.restored_open_bets", count=len(fav_positions))
+
+    if status["state"] == "ephemeral":
+        add_alert("warn", f"Almacenamiento efímero — {status['reason']}")
+    elif status["state"] == "unproven":
+        add_alert("info", f"Persistencia sin verificar — {status['reason']}")
+    else:
+        add_alert("info", f"Almacenamiento persistente — {status['reason']}")
+
     clob_ws.start()
     asyncio.create_task(poll_loop())
     asyncio.create_task(prediction_loop())
@@ -984,6 +1088,7 @@ async def post_manual_prediction(payload: dict = Body(...)) -> JSONResponse:
         league=str(payload.get("league") or ""),
         discipline=str(payload.get("discipline") or ""),
         stake=PREDICTION_STAKE,
+        volume_24h=_as_float(payload.get("volume_24h")) or 0.0,
     )
     add_alert(
         "info",

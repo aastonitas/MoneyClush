@@ -356,7 +356,7 @@
   <div class="hstat">SOL <b id="h-sol">—</b></div>
   <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
   <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
-  <div class="hstat" id="h-store" style="display:none">DB <b class="down">EFÍMERA</b></div>
+  <div class="hstat" id="h-store" style="display:none">DB <b class="down" id="h-store-val">EFÍMERA</b></div>
   <div class="tabs">
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
@@ -890,10 +890,25 @@ async function refresh() {
     // that is holding trades back is stated outright.
     // Accumulating weeks of data onto a disk that a redeploy wipes is the
     // one failure that cannot be recovered from, so it is surfaced up top.
+    // Three states, not two. "Variable definida" is not the same as "los
+    // datos sobreviven": apuntar MONEYCLUSH_DB a una carpeta que no es un
+    // volumen escribe perfectamente y se borra igual en el redeploy, así
+    // que hasta que no haya sobrevivido a un despliegue se dice NO VERIF.
+    const storage = s.storage || {};
     const storeEl = $("h-store");
-    storeEl.style.display = s.storage_durable === false ? "" : "none";
-    storeEl.title = "Los datos se borrarán en el próximo despliegue. "
-      + "Define MONEYCLUSH_DB apuntando a un volumen persistente.";
+    const storeVal = $("h-store-val");
+    if (storage.state === "ephemeral") {
+      storeEl.style.display = "";
+      storeVal.textContent = "EFÍMERA";
+      storeVal.className = "down";
+    } else if (storage.state === "unproven") {
+      storeEl.style.display = "";
+      storeVal.textContent = "NO VERIF.";
+      storeVal.className = "amber";
+    } else {
+      storeEl.style.display = "none";
+    }
+    storeEl.title = storage.reason || "";
 
     const gate = s.strategy_gate || {};
     const fav = s.fav_stats || {};
@@ -914,9 +929,11 @@ async function refresh() {
       $("pnl-val").textContent = (pnl >= 0 ? "+" : "−") + "$" + Math.abs(pnl).toFixed(2);
       $("pnl-val").className = "pnl-big " + (pnl >= 0 ? "up" : "down");
       $("pnl-badge").textContent = "FAVORITO";
+      const vCls = fav.significant ? (fav.edge_pts < 0 ? "amber" : "up") : "dim";
       $("pnl-why").innerHTML =
         `curva = <b>backing al favorito</b>, $1 por ventana BTC · ${fav.resolved} resueltas, ` +
-        `acierto ${hr} vs ${eh} esperado · ${gate.fav_open || 0} en juego<br>${arbTxt}`;
+        `acierto ${hr} vs ${eh} del mercado · ${gate.fav_open || 0} en juego<br>` +
+        `<span class="${vCls}">${fav.verdict || ""}</span><br>${arbTxt}`;
       $("pnl-calibration").innerHTML = calibrationTable(fav.calibration, "POR BANDA DE PRECIO");
     } else {
       $("pnl-why").innerHTML = (gate.fav_open || 0)
@@ -1088,7 +1105,7 @@ function drawMatches(list, emptyMsg) {
           data-ask="${o.ask == null ? "" : o.ask}" data-prob="${o.prob}"
           data-title="${m.title.replace(/"/g, "&quot;")}" data-url="${m.url}"
           data-league="${(m.league || "").replace(/"/g, "&quot;")}"
-          data-disc="${m.discipline || ""}"
+          data-disc="${m.discipline || ""}" data-vol="${m.volume_24h || 0}"
           title="${isMine ? "tu pick" : "apostar $1 · paga $" + payout}"
           >${isMine ? "TU PICK" : "$1→$" + payout}</button>
       </div>`;
@@ -1160,6 +1177,7 @@ function wireBetButtons(containerId) {
             pick_prob: parseFloat(btn.dataset.prob),
             league: btn.dataset.league,
             discipline: btn.dataset.disc,
+            volume_24h: parseFloat(btn.dataset.vol || "0"),
           }),
         });
         const data = await r.json();
@@ -1250,28 +1268,44 @@ let predData = { ia: {}, manual: {} };
 // Two columns of the same metrics: yours against the automatic picks.
 // A single hit-rate number hides where the edge actually lives — the BTC
 // backtest found the bias concentrated in 0.60-0.90, not spread evenly.
-function calibrationTable(bands, title) {
+// A coloured number is a claim, and colouring `edge_pts` on its own size
+// makes the claim off any sample at all: four bets in a band produce a
+// "+28.2" in bright green that means nothing. The colour now follows the
+// z-score, so a band only lights up once the gap clears 95% confidence;
+// everything else stays grey no matter how large it looks. The interval
+// column is there so the grey ones are still readable — "64% (35-85)"
+// says what "64%" alone hides.
+function calibrationTable(bands, title, unit) {
   const rows = (bands || []).filter(b => b.n > 0);
   if (!rows.length) {
     return `<div class="cal-title">${title}</div><div class="dim" style="font-size:9.5px">sin resueltas todavía</div>`;
   }
+  const pct = v => (v * 100).toFixed(0);
   return `
     <div class="cal-title">${title}</div>
     <table class="cal-table">
-      <thead><tr><th>PRECIO</th><th>N</th><th>ACIERTO</th><th>ESPERADO</th><th>DIF</th><th>PNL</th></tr></thead>
+      <thead><tr><th>${unit || "PROB"}</th><th>N</th><th>ACIERTO</th><th>IC 95%</th>
+        <th>MERCADO</th><th>DIF</th><th>Z</th><th>PNL</th></tr></thead>
       <tbody>${rows.map(b => {
-        const edgeCls = b.edge_pts == null ? "dim" : b.edge_pts <= -5 ? "amber" : b.edge_pts >= 5 ? "up" : "dim";
+        const edgeCls = !b.significant ? "dim" : b.edge_pts < 0 ? "amber" : "up";
         const pnlCls = (b.pnl || 0) > 0 ? "up" : (b.pnl || 0) < 0 ? "down" : "dim";
+        const ci = b.ci_low == null ? "—" : `${pct(b.ci_low)}-${pct(b.ci_high)}`;
         return `<tr>
           <td>${b.band}</td>
           <td class="dim">${b.n}</td>
-          <td>${(b.hit_rate * 100).toFixed(0)}%</td>
-          <td class="cyan">${(b.expected_hit_rate * 100).toFixed(0)}%</td>
+          <td>${pct(b.hit_rate)}%</td>
+          <td class="dim" style="font-size:8.5px">${ci}</td>
+          <td class="cyan">${pct(b.expected_hit_rate)}%</td>
           <td class="${edgeCls}">${b.edge_pts >= 0 ? "+" : ""}${b.edge_pts.toFixed(1)}</td>
+          <td class="${edgeCls}">${b.z == null ? "—" : (b.z >= 0 ? "+" : "") + b.z.toFixed(2)}</td>
           <td class="${pnlCls}">${(b.pnl || 0) >= 0 ? "+" : "−"}$${Math.abs(b.pnl || 0).toFixed(2)}</td>
         </tr>`;
       }).join("")}</tbody>
-    </table>`;
+    </table>
+    <div class="dim" style="font-size:8.5px; margin-top:3px; line-height:1.4">
+      MERCADO = probabilidad del mercado (mid sin margen), no el ask pagado.
+      Solo se colorea la fila cuando |z| ≥ 1.96; el resto es ruido.
+    </div>`;
 }
 
 function compareBlock(manS, iaS) {
@@ -1285,14 +1319,18 @@ function compareBlock(manS, iaS) {
   const cls = v => (v || 0) > 0 ? "up" : (v || 0) < 0 ? "down" : "dim";
 
   // The gap between realised and expected is the experiment: picks that win
-  // less often than their price implied were overpriced.
-  const gap = s => (s.hit_rate == null || s.expected_hit_rate == null)
-    ? null : (s.hit_rate - s.expected_hit_rate) * 100;
-  const gm = gap(manS), gi = gap(iaS);
-  const gapTxt = g => g == null ? "—" : (g >= 0 ? "+" : "") + g.toFixed(1) + " pts";
-  const gapCls = g => g == null ? "dim" : g < -2 ? "amber" : g > 2 ? "up" : "dim";
+  // less often than their price implied were overpriced. It is also the
+  // number most likely to be misread, so it never gets a colour until the
+  // z-score says the gap is bigger than the sampling noise around it.
+  const gapTxt = s => s.edge_pts == null
+    ? "—" : (s.edge_pts >= 0 ? "+" : "") + s.edge_pts.toFixed(1) + " pts";
+  const gapCls = s => !s.significant ? "dim" : s.edge_pts < 0 ? "amber" : "up";
+  const ciTxt = s => s.ci_low == null
+    ? "—" : `${(s.ci_low * 100).toFixed(0)}-${(s.ci_high * 100).toFixed(0)}%`;
 
-  let note = '<span class="dim">la columna clave es DIFERENCIA: acertar mucho no basta si pagabas caro por ello.</span>';
+  let note = `<span class="dim">la columna clave es DIFERENCIA, y solo cuenta si z la acompaña: `
+    + `acertar mucho no basta si pagabas caro, y una diferencia grande sobre pocas apuestas no es nada.</span>`
+    + `<div style="margin-top:5px" class="${gapCls(iaS)}">IA: ${iaS.verdict || "sin datos"}</div>`;
   if ((manS.resolved || 0) === 0 && (manS.pending || 0) === 0) {
     note = '<span class="dim">pulsa $1→$X en cualquier resultado para hacer tu pick.</span>';
   }
@@ -1305,10 +1343,15 @@ function compareBlock(manS, iaS) {
     ${row("aciertos", manS.wins || 0, iaS.wins || 0, "up")}
     ${row("fallos", manS.losses || 0, iaS.losses || 0, "down")}
     ${row("acierto", pct(manS.hit_rate), pct(iaS.hit_rate))}
-    ${row("esperado", pct(manS.expected_hit_rate), pct(iaS.expected_hit_rate), "cyan")}
+    ${row("IC 95%", ciTxt(manS), ciTxt(iaS), "dim")}
+    ${row("mercado", pct(manS.expected_hit_rate), pct(iaS.expected_hit_rate), "cyan")}
     <div class="cmp-row"><span class="cmp-label">diferencia</span>
-      <span class="cmp-v ${gapCls(gm)}">${gapTxt(gm)}</span>
-      <span class="cmp-v ${gapCls(gi)}">${gapTxt(gi)}</span></div>
+      <span class="cmp-v ${gapCls(manS)}">${gapTxt(manS)}</span>
+      <span class="cmp-v ${gapCls(iaS)}">${gapTxt(iaS)}</span></div>
+    <div class="cmp-row"><span class="cmp-label">z</span>
+      <span class="cmp-v ${gapCls(manS)}">${manS.z == null ? "—" : manS.z.toFixed(2)}</span>
+      <span class="cmp-v ${gapCls(iaS)}">${iaS.z == null ? "—" : iaS.z.toFixed(2)}</span></div>
+    ${row("anuladas", manS.void || 0, iaS.void || 0, "dim")}
     ${row("invertido", `$${(manS.staked || 0).toFixed(0)}`, `$${(iaS.staked || 0).toFixed(0)}`)}
     <div class="cmp-row"><span class="cmp-label">PnL</span>
       <span class="cmp-v ${cls(manS.pnl)}">${money(manS.pnl)}</span>
@@ -1318,7 +1361,14 @@ function compareBlock(manS, iaS) {
       <span class="cmp-v ${cls(iaS.pnl)}">${pct(iaS.roi)}</span></div>
     <div style="margin-top:8px; line-height:1.45; font-size:9.5px">${note}</div>
     <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--line)">
-      ${calibrationTable(iaS.calibration, "CALIBRACIÓN IA POR BANDA DE PRECIO")}
+      ${calibrationTable(iaS.calibration, "CALIBRACIÓN IA POR PROBABILIDAD")}
+    </div>
+    <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--line)">
+      ${calibrationTable(iaS.calibration_volume, "CALIBRACIÓN IA POR VOLUMEN 24H", "VOL")}
+      ${(iaS.volume_unknown || 0)
+        ? `<div class="dim" style="font-size:8.5px; margin-top:3px">${iaS.volume_unknown} apuesta(s)
+           anteriores al registro de volumen, excluidas de esta tabla.</div>`
+        : ""}
     </div>`;
 }
 
@@ -1330,18 +1380,16 @@ function statsBlock(s, isIa) {
 
   // The gap between realised and expected hit rate is the whole experiment:
   // if picks win less often than their price implies, they were overpriced.
+  // The reading comes from the server, which knows the z-score — declaring
+  // "sobrevalorados" off a 10-bet sample was calling noise a result.
   let verdict = s.total
     ? '<span class="dim">esperando resultados de los partidos</span>'
     : (isIa
         ? '<span class="dim">aún sin picks</span>'
         : '<span class="dim">pulsa $1→$X en cualquier resultado para apostar</span>');
-  if (s.resolved >= 10 && hit != null && exp != null) {
-    const diff = hit - exp;
-    verdict = Math.abs(diff) < 2
-      ? `<span class="dim">aciertas casi exactamente lo que el precio predecía (${diff >= 0 ? "+" : ""}${diff.toFixed(1)} pts)</span>`
-      : diff < 0
-        ? `<span class="amber">aciertas ${Math.abs(diff).toFixed(1)} pts MENOS de lo que cotizaban — picks sobrevalorados</span>`
-        : `<span class="up">aciertas ${diff.toFixed(1)} pts MÁS de lo que cotizaban</span>`;
+  if (s.resolved && s.verdict) {
+    const vc = !s.significant ? "dim" : (s.edge_pts < 0 ? "amber" : "up");
+    verdict = `<span class="${vc}">${s.verdict}</span>`;
   }
 
   return `
@@ -1552,6 +1600,7 @@ function drawTrending(list, emptyMsg) {
           data-ask="${price}" data-prob="${price}"
           data-title="${e.title.replace(/"/g, "&quot;")}" data-url="${e.url}"
           data-league="${(e.category || "").replace(/"/g, "&quot;")}" data-disc="trending"
+          data-vol="${e.volume_24h || 0}"
           title="${isMine ? "tu pick" : "apostar $1 · paga $" + payout}"
           >${isMine ? "TU PICK" : "$1→$" + payout}</button>
       </div>`;

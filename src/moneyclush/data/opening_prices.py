@@ -27,12 +27,20 @@ INSTRUMENTS = {
 }
 
 
+# A candle that is not there yet appears within a minute, so a miss is
+# worth retrying — but not on every 3-second poll of every market, which
+# is how a handful of unavailable windows turns into a steady stream of
+# pointless requests and an eventual rate limit.
+MISS_RETRY_SECONDS = 20.0
+
+
 @dataclass
 class OpeningPriceCache:
     """Fetches and caches real opening prices per (asset, window_start)."""
 
     _cache: dict[tuple[str, int], float] = field(default_factory=dict)
-    _misses: set[tuple[str, int]] = field(default_factory=set)
+    # key -> when it was last looked up and not found.
+    _misses: dict[tuple[str, int], float] = field(default_factory=dict)
 
     async def get(
         self,
@@ -50,6 +58,10 @@ class OpeningPriceCache:
         if key in self._cache:
             return self._cache[key]
 
+        last_miss = self._misses.get(key)
+        if last_miss is not None and time.time() - last_miss < MISS_RETRY_SECONDS:
+            return None
+
         inst = INSTRUMENTS.get(asset)
         if inst is None:
             return None
@@ -66,23 +78,24 @@ class OpeningPriceCache:
             resp.raise_for_status()
             candles = resp.json().get("data", [])
         except Exception:
+            self._misses[key] = time.time()
             return None
 
+        self._prune()
         for c in candles:
             if int(c[0]) // 1000 == window_start_epoch:
                 opening = float(c[1])
                 self._cache[key] = opening
-                self._misses.discard(key)
-                self._prune()
+                self._misses.pop(key, None)
                 return opening
 
-        self._misses.add(key)
+        self._misses[key] = time.time()
         return None
 
     def _prune(self) -> None:
-        """Drop cache entries older than 2 hours."""
+        """Drop entries for windows that closed more than 2 hours ago."""
         cutoff = time.time() - 7200
         for key in [k for k in self._cache if k[1] < cutoff]:
             self._cache.pop(key, None)
         for key in [k for k in self._misses if k[1] < cutoff]:
-            self._misses.discard(key)
+            self._misses.pop(key, None)

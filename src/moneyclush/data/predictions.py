@@ -8,9 +8,16 @@ fading the favourite in the 0.60-0.90 band returned +2-4c per trade.
 Running it live on sports is a way to see whether the same bias shows up
 here, on a different asset class, with real resolutions.
 
-Each pick is priced at the ask, so one share costs what it would actually
-cost to buy: a win returns `1 - ask`, a loss returns `-ask`. Quoting the
-last-traded price instead would flatter every number.
+Two prices per pick, and they are not interchangeable:
+
+    pick_prob   de-vigged market probability at entry — the hypothesis
+    pick_ask    what one share actually cost — the money
+
+Calibration compares realised hit rates against `pick_prob`, never
+against `pick_ask`: the ask sits half a spread above what the market
+actually believes, so scoring the market's forecast at the ask charges it
+the spread and manufactures a deficit of 2-3 points — the same order of
+magnitude as the effect being measured.
 
 Predictions are appended to a JSONL ledger so the record survives a
 restart and cannot be quietly re-written after the fact.
@@ -20,12 +27,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 import structlog
 
+from moneyclush import calibration
 from moneyclush.data import store
 
 log = structlog.get_logger()
@@ -36,47 +44,36 @@ UA_HEADERS = {"User-Agent": "Mozilla/5.0"}
 # A resolved outcome settles at exactly 1; allow for float noise.
 RESOLVED_AT = 0.99
 
-# The backtest on 299 BTC windows found the favourite-overpricing bias
-# concentrated in 0.60-0.90, not spread evenly, so a single aggregate hit
-# rate hides exactly the thing worth knowing. These bands are where that
-# split matters: cheap picks, the suspect band, and near-locks.
-CALIBRATION_BANDS = (
-    (0.50, 0.60, "50-60%"),
-    (0.60, 0.70, "60-70%"),
-    (0.70, 0.80, "70-80%"),
-    (0.80, 0.90, "80-90%"),
-    (0.90, 1.01, "90%+"),
-)
+# Polymarket settles a market in two steps: a resolution is proposed to
+# UMA, and only later does the whole event flip to `closed`. Waiting for
+# the event flag means waiting on every prop market on the card, which on
+# a UFC event is hours to days after the fight ended. Either signal on the
+# individual result market is enough.
+SETTLED_UMA_STATUSES = {"proposed", "resolved", "settled"}
+
+# A pick that cannot be settled must not sit at the head of the queue
+# forever. Retries back off geometrically from this base.
+RETRY_BASE_SECONDS = 90.0
+RETRY_MAX_SECONDS = 6 * 3600.0
+
+# Seven days past kick-off with no settlement means the fixture is never
+# going to settle. Keeping it pending would slowly fill the resolve batch
+# with corpses until nothing new ever gets checked.
+ABANDON_AFTER_HOURS = 168.0
 
 
-def calibration_table(predictions: list) -> list[dict]:
-    """Realised vs. expected hit rate inside each price band.
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    A pick's own ask (not its normalised probability) is the number a
-    trader actually paid, so banding on `pick_ask` is what tells you
-    whether a given price level is worth backing or fading.
-    """
-    rows = []
-    for lo, hi, label in CALIBRATION_BANDS:
-        bucket = [p for p in predictions if p.resolved and lo <= p.pick_ask < hi]
-        if not bucket:
-            rows.append({
-                "band": label, "n": 0, "hit_rate": None,
-                "expected_hit_rate": None, "edge_pts": None, "pnl": None,
-            })
-            continue
-        wins = sum(1 for p in bucket if p.won)
-        hit = wins / len(bucket)
-        expected = sum(p.pick_ask for p in bucket) / len(bucket)
-        rows.append({
-            "band": label,
-            "n": len(bucket),
-            "hit_rate": round(hit, 4),
-            "expected_hit_rate": round(expected, 4),
-            "edge_pts": round((hit - expected) * 100, 2),
-            "pnl": round(sum(p.pnl for p in bucket), 4),
-        })
-    return rows
+
+def _parse(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 @dataclass
@@ -87,16 +84,28 @@ class Prediction:
     league: str
     discipline: str
     pick: str                     # outcome we backed
-    pick_prob: float              # normalised probability at pick time
+    pick_prob: float              # de-vigged probability at pick time
     pick_ask: float               # price per share at pick time
     recorded_at: str
     start_time: str | None = None
     source: str = "ia"            # "ia" (automatic) | "manual" (user pick)
     stake: float = 1.0            # dollars committed
+    volume_24h: float = 0.0       # book depth at entry, for banding
     resolved: bool = False
     won: bool | None = None
     winner: str | None = None
     resolved_at: str | None = None
+    # Resolution bookkeeping. Without it a fixture that never settles is
+    # retried at full rate forever and blocks everything behind it.
+    attempts: int = 0
+    last_attempt_at: str | None = None
+    void: bool = False            # market settled paying nobody
+    abandoned: bool = False       # gave up; excluded from every statistic
+
+    @property
+    def fair_prob(self) -> float:
+        """The market's own probability at entry — the calibration baseline."""
+        return self.pick_prob
 
     @property
     def shares(self) -> float:
@@ -117,6 +126,30 @@ class Prediction:
         """What the stake returns if the pick lands."""
         return self.shares
 
+    @property
+    def settled(self) -> bool:
+        """Whether this pick has left the queue, one way or another."""
+        return self.resolved or self.void or self.abandoned
+
+    def next_attempt_due(self) -> datetime:
+        """When this pick may be checked again.
+
+        Geometric backoff so a fixture stuck in dispute costs one request
+        every six hours instead of one every two minutes.
+        """
+        last = _parse(self.last_attempt_at)
+        if last is None or self.attempts <= 0:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        delay = min(RETRY_BASE_SECONDS * (2 ** (self.attempts - 1)), RETRY_MAX_SECONDS)
+        return last + timedelta(seconds=delay)
+
+    def is_stale(self) -> bool:
+        """Past the point where settlement is still plausible."""
+        reference = _parse(self.start_time) or _parse(self.recorded_at)
+        if reference is None:
+            return False
+        return _now() - reference > timedelta(hours=ABANDON_AFTER_HOURS)
+
 
 def _loads(value, default):
     if isinstance(value, str):
@@ -134,41 +167,72 @@ def _as_float(value) -> float | None:
         return None
 
 
-def _winner_of(event: dict) -> str | None:
-    """Which outcome settled at 1, or None if the event has not resolved.
+def _result_markets(event: dict) -> list[tuple[str, float, bool]]:
+    """(outcome label, its price, whether that market has settled).
 
-    Both market shapes are handled: a 1X2 fixture resolves the winning
-    side's own Yes/No market to 1, while a moneyline resolves one of the
-    two competitor tokens inside a single market.
+    Both market shapes are handled: a 1X2 fixture carries one Yes/No
+    market per side (plus the draw), while a moneyline holds the two
+    competitors as complementary tokens inside a single market. Prop
+    markets — totals, method of victory, round betting — share the event
+    and must not be mistaken for the result.
     """
-    if not event.get("closed"):
-        return None
-
     teams = _loads(event.get("teams"), [])
     names = {t.get("name") for t in teams if isinstance(t, dict) and t.get("name")}
 
+    found: list[tuple[str, float, bool]] = []
     for market in event.get("markets") or []:
         outcomes = [str(o) for o in _loads(market.get("outcomes"), [])]
         prices = [_as_float(p) for p in _loads(market.get("outcomePrices"), [])]
         if len(outcomes) != 2 or len(prices) != 2 or None in prices:
             continue
 
+        uma = (market.get("umaResolutionStatus") or "").strip().lower()
+        settled = bool(market.get("closed")) or uma in SETTLED_UMA_STATUSES
         group = (market.get("groupItemTitle") or "").strip()
 
-        # 1X2: a Yes/No market named after one side (or the draw).
         if [o.lower() for o in outcomes] == ["yes", "no"]:
-            is_result_market = group in names or group.lower().startswith("draw")
-            if is_result_market and prices[0] >= RESOLVED_AT:
-                return "Empate" if group.lower().startswith("draw") else group
+            if group in names:
+                found.append((group, prices[0], settled))
+            elif group.lower().startswith("draw"):
+                found.append(("Empate", prices[0], settled))
             continue
 
-        # Moneyline: the two competitors inside one market.
         if names and {o.strip() for o in outcomes} == names:
             for outcome, price in zip(outcomes, prices):
-                if price >= RESOLVED_AT:
-                    return outcome
+                found.append((outcome, price, settled))
 
-    return None
+    return found
+
+
+def _decide(event: dict) -> tuple[str | None, bool]:
+    """(winner, was_voided) for a fixture, from its result markets.
+
+    Deliberately does *not* consult the event-level `closed` flag. That
+    flag only flips once UMA has finalised every market on the event,
+    which trails the actual result by hours or days — measured against
+    live data, 138 of 139 pending picks had `closed=False` while a third
+    of them already had a settled result market.
+
+    Equally deliberately, a price of 99c on a market that has *not*
+    settled is not treated as a winner. That is the market forecasting,
+    not the fixture finishing, and recording it would be scoring the
+    ledger against the very prices it is supposed to be testing.
+    """
+    markets = _result_markets(event)
+    settled = [(label, price) for label, price, is_settled in markets if is_settled]
+    if not settled:
+        return None, False
+
+    for label, price in settled:
+        if price >= RESOLVED_AT:
+            return label, False
+
+    # Every deciding market settled and none paid out: the fixture was
+    # cancelled and the stake comes back. Not a loss, not a win, no data.
+    if all(abs(price - 0.5) < 1e-9 for _, price in settled):
+        return None, True
+
+    return None, False
 
 
 @dataclass
@@ -183,8 +247,8 @@ class PredictionLedger:
         """Tolerate rows written before a field existed rather than
         discarding history on every schema change."""
         data = dict(data)
-        data.pop("pnl", None)
-        data.pop("payout", None)
+        for derived in ("pnl", "payout", "pick_mid"):
+            data.pop(derived, None)
         known = Prediction.__dataclass_fields__.keys()
         try:
             return Prediction(**{k: v for k, v in data.items() if k in known})
@@ -227,10 +291,18 @@ class PredictionLedger:
         """Automatic and manual picks coexist on the same fixture."""
         return f"{prediction.source}:{prediction.event_id}"
 
-    def _append(self, prediction: Prediction) -> None:
-        """Write through to the database; the JSONL stays as a plain-text
-        audit trail that survives independently of the schema."""
+    def _persist(self, prediction: Prediction, audit: bool = True) -> None:
+        """Write through to the database.
+
+        `audit=False` is for bookkeeping that changes no outcome — retry
+        counters and timestamps. Those must survive a restart, or the
+        backoff resets and the queue jams again, but appending them to the
+        plain-text ledger would bury the actual picks under thousands of
+        lines of "checked again, still nothing".
+        """
         store.save_prediction(self._key(prediction), asdict(prediction))
+        if not audit:
+            return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
@@ -273,12 +345,13 @@ class PredictionLedger:
                 pick=outcome.label,
                 pick_prob=round(prob, 4),
                 pick_ask=round(outcome.best_ask, 4),
-                recorded_at=datetime.now(timezone.utc).isoformat(),
+                recorded_at=_now().isoformat(),
                 start_time=match.start_time.isoformat() if match.start_time else None,
                 source="ia",
+                volume_24h=round(getattr(match, "volume_24h", 0.0) or 0.0, 2),
             )
             self.predictions[self._key(prediction)] = prediction
-            self._append(prediction)
+            self._persist(prediction)
             added += 1
         return added
 
@@ -293,6 +366,7 @@ class PredictionLedger:
         league: str = "",
         discipline: str = "",
         stake: float = 1.0,
+        volume_24h: float = 0.0,
     ) -> Prediction:
         """A pick the user made by hand, priced the same way as an automatic one."""
         prediction = Prediction(
@@ -304,33 +378,43 @@ class PredictionLedger:
             pick=pick,
             pick_prob=round(pick_prob, 4),
             pick_ask=round(pick_ask, 4),
-            recorded_at=datetime.now(timezone.utc).isoformat(),
+            recorded_at=_now().isoformat(),
             source="manual",
             stake=stake,
+            volume_24h=round(volume_24h or 0.0, 2),
         )
         self.predictions[self._key(prediction)] = prediction
-        self._append(prediction)
+        self._persist(prediction)
         return prediction
 
     def pending(self) -> list[Prediction]:
-        return [p for p in self.predictions.values() if not p.resolved]
+        """Picks still waiting on a result — excludes voids and write-offs."""
+        return [p for p in self.predictions.values() if not p.settled]
 
     def _resolve_order(self) -> list[Prediction]:
-        """Pending picks, most likely to be settled first.
+        """Pending picks that are due a check, most likely to settle first.
 
-        Insertion order starves the tail: automatic picks are recorded in
-        bulk, so a manual pick lands behind a hundred of them and is never
-        reached while long-running fixtures sit at the front. Ordering by
-        the user's own picks first, then by kick-off age, keeps the queue
-        moving and the picks that matter most checked every cycle.
+        Two things starve this queue if left alone. Insertion order puts a
+        manual pick behind a hundred automatic ones, so it never gets
+        reached. And a fixture that will never settle — a cancelled match,
+        a disputed resolution — sorts to the very front by age and holds
+        its slot in every single batch, forever; the batch is a fixed-size
+        prefix, so a handful of those permanently hides everything behind
+        them. Filtering on the backoff clock is what breaks that: a stuck
+        pick drops to one check every six hours and stops crowding out
+        fixtures that are actually finishing.
         """
+        now = _now()
+        due = [p for p in self.pending() if p.next_attempt_due() <= now]
+
         def sort_key(p: Prediction):
             return (
                 0 if p.source == "manual" else 1,
+                p.attempts,                      # least-tried first
                 p.start_time or p.recorded_at,
             )
 
-        return sorted(self.pending(), key=sort_key)
+        return sorted(due, key=sort_key)
 
     async def resolve(self, client: httpx.AsyncClient, batch: int = 40) -> int:
         """Settle any pending picks whose events have since closed."""
@@ -340,6 +424,22 @@ class PredictionLedger:
 
         settled = 0
         for prediction in outstanding[:batch]:
+            prediction.attempts += 1
+            prediction.last_attempt_at = _now().isoformat()
+
+            # Give up on fixtures that are never going to settle, so they
+            # stop consuming a request every six hours until the heat death
+            # of the universe.
+            if prediction.is_stale():
+                prediction.abandoned = True
+                log.info(
+                    "predictions.abandoned",
+                    event_id=prediction.event_id,
+                    attempts=prediction.attempts,
+                )
+                self._persist(prediction)
+                continue
+
             try:
                 resp = await client.get(
                     GAMMA_EVENTS,
@@ -351,22 +451,49 @@ class PredictionLedger:
                 payload = resp.json()
             except Exception as exc:
                 log.warning("predictions.resolve_failed", error=str(exc)[:80])
+                self._persist(prediction, audit=False)
                 continue
 
             if not payload:
+                self._persist(prediction, audit=False)
                 continue
-            winner = _winner_of(payload[0])
+
+            winner, was_void = _decide(payload[0])
+
+            if was_void:
+                # Stake returned, no information. Counting it as a loss
+                # would invent a defeat the market never handed out.
+                prediction.void = True
+                prediction.resolved_at = _now().isoformat()
+                log.info("predictions.void", event_id=prediction.event_id)
+                self._persist(prediction)
+                continue
+
             if winner is None:
+                self._persist(prediction, audit=False)
                 continue
 
             prediction.resolved = True
             prediction.winner = winner
             prediction.won = winner.strip().lower() == prediction.pick.strip().lower()
-            prediction.resolved_at = datetime.now(timezone.utc).isoformat()
-            self._append(prediction)
+            prediction.resolved_at = _now().isoformat()
+            self._persist(prediction)
             settled += 1
 
         return settled
+
+    def _samples(self, picks: list[Prediction]) -> list[calibration.Sample]:
+        return [
+            calibration.Sample(
+                prob=p.fair_prob,
+                ask=p.pick_ask,
+                won=bool(p.won),
+                pnl=p.pnl,
+                volume=p.volume_24h,
+            )
+            for p in picks
+            if p.resolved and p.won is not None
+        ]
 
     def stats(self, source: str | None = None) -> dict:
         picks = [
@@ -374,30 +501,49 @@ class PredictionLedger:
             if source is None or p.source == source
         ]
         resolved = [p for p in picks if p.resolved]
-        wins = sum(1 for p in resolved if p.won)
+        samples = self._samples(resolved)
+        overall = calibration.summary(samples)
+
         pnl = sum(p.pnl for p in resolved)
         staked = sum(p.stake for p in resolved)
-
-        # Expected hit rate if the market's prices are honest. Comparing the
-        # realised rate against this is the whole point of the exercise.
-        expected = sum(p.pick_prob for p in resolved)
+        open_picks = [p for p in picks if not p.settled]
 
         return {
             "total": len(picks),
-            "pending": len(picks) - len(resolved),
+            "pending": len(open_picks),
             "resolved": len(resolved),
-            "wins": wins,
-            "losses": len(resolved) - wins,
-            "hit_rate": round(wins / len(resolved), 4) if resolved else None,
-            "expected_hit_rate": (
-                round(expected / len(resolved), 4) if resolved else None
-            ),
+            "void": sum(1 for p in picks if p.void),
+            "abandoned": sum(1 for p in picks if p.abandoned),
+            "wins": overall["wins"],
+            "losses": len(resolved) - overall["wins"],
+            "hit_rate": overall["hit_rate"],
+            # What the market's own prices said would happen. The gap
+            # between this and hit_rate is the entire experiment.
+            "expected_hit_rate": overall["expected_hit_rate"],
+            "ci_low": overall["ci_low"],
+            "ci_high": overall["ci_high"],
+            "edge_pts": overall["edge_pts"],
+            "z": overall["z"],
+            "significant": overall["significant"],
+            "verdict": calibration.verdict(overall),
             "staked": round(staked, 2),
             "pnl": round(pnl, 4),
             "pnl_per_trade": round(pnl / len(resolved), 4) if resolved else None,
             "roi": round(pnl / staked, 4) if staked > 0 else None,
-            "open_stake": round(sum(p.stake for p in picks if not p.resolved), 2),
-            "calibration": calibration_table(resolved),
+            "open_stake": round(sum(p.stake for p in open_picks), 2),
+            "calibration": calibration.calibration_rows(samples),
+            # Thin books are where stale prices survive; deep ones are
+            # already arbitraged. The volume was being fetched and thrown
+            # away. Rows written before the field existed carry 0, which
+            # is "unknown" rather than "illiquid" — counting them as the
+            # latter would stuff the thin band with the entire back
+            # catalogue and invent a result there.
+            "calibration_volume": calibration.calibration_rows(
+                [s for s in samples if s.volume > 0],
+                calibration.VOLUME_BANDS,
+                by="volume",
+            ),
+            "volume_unknown": sum(1 for s in samples if s.volume <= 0),
             "curve": self._equity_curve(resolved),
         }
 
@@ -409,13 +555,10 @@ class PredictionLedger:
         running = 0.0
         for p in ordered:
             running += p.pnl
-            try:
-                ts_ms = int(
-                    datetime.fromisoformat(p.resolved_at).timestamp() * 1000
-                )
-            except (TypeError, ValueError):
+            parsed = _parse(p.resolved_at)
+            if parsed is None:
                 continue
-            curve.append([ts_ms, round(running, 4)])
+            curve.append([int(parsed.timestamp() * 1000), round(running, 4)])
         return curve[-300:]
 
     def recent(self, limit: int = 40, source: str | None = None) -> list[dict]:

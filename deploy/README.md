@@ -84,9 +84,28 @@ El sistema acumula predicciones y resultados durante semanas para poder
 concluir sobre el sesgo del favorito. El disco de un contenedor se borra en
 cada despliegue, así que sin un volumen se pierde todo.
 
-1. Railway → tu servicio → **Variables** → `MONEYCLUSH_DB` = `/data/moneyclush.db`
-2. Railway → **Volumes** → *New Volume*, punto de montaje `/data`
+Hacen falta **los dos pasos**, y el orden importa poco pero omitir el segundo
+es el error silencioso:
 
-Sin `MONEYCLUSH_DB` la cabecera muestra `DB EFÍMERA` en rojo y se emite una
-alerta al arrancar. El fichero `data/predictions.jsonl` se mantiene como
-registro en texto plano y se migra automáticamente a SQLite al iniciar.
+1. Railway → **Volumes** → *New Volume*, punto de montaje `/data`
+2. Railway → tu servicio → **Variables** → `MONEYCLUSH_DB` = `/data/moneyclush.db`
+
+Definir la variable sin montar el volumen **no da ningún error**: `/data` se
+crea como una carpeta normal del contenedor, todas las escrituras funcionan y
+los datos se borran igual en el siguiente despliegue. Por eso el panel no se
+fía de la variable, sino que lo comprueba:
+
+| Cabecera | Significado |
+|---|---|
+| *(sin badge)* | `durable` — verificado, los datos ya sobrevivieron a un redeploy |
+| `DB NO VERIF.` | aún no ha pasado un despliegue; no se puede afirmar nada todavía |
+| `DB EFÍMERA` | `/data` no es un punto de montaje, o falta la variable — se pierden |
+
+Cada arranque escribe una fila en la tabla `boots` con el id del despliegue.
+En cuanto la base contiene arranques de un despliegue **anterior y distinto**,
+la persistencia queda demostrada y el badge desaparece. Pasa el ratón por
+encima para ver el motivo exacto.
+
+Los ficheros de datos (`data/*.db`, `data/predictions.jsonl`) están fuera de
+git a propósito: si se commitean, cada despliegue sobrescribe el histórico
+acumulado con la copia del repositorio.

@@ -4,8 +4,9 @@
     {
       "name": "terminal-dashboard",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["dashboard/server.py"],
-      "port": 8642
+      "runtimeArgs": ["main.py"],
+      "port": 8642,
+      "autoPort": true
     }
   ]
 }

@@ -171,7 +171,7 @@ class TemporalArbitrageStrategy(Strategy):
             target_size=size,
             edge=edge,
             confidence=0.60,
-            reason=f"leg_build: {needed.value}@{current_ask:.3f} (max {max_price:.3f})",
+            reason=f"leg_build: {needed.value}@{current_ask:.3f} (max {budget:.3f})",
         )
 
     def should_exit(
