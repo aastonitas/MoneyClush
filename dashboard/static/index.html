@@ -69,11 +69,27 @@
     min-height: 0;
   }
   .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+  /* Sports and Trending mirror the crypto view: work on the left, the same
+     full-height news column pinned on the right. */
   .grid-2col {
-    display: grid; grid-template-columns: 260px 1fr; gap: 8px;
+    display: grid; grid-template-columns: 1fr 235px; gap: 8px;
     align-items: stretch; flex: 1; min-height: 0;
   }
-  @media (max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
+  .grid-sports {
+    display: grid; grid-template-columns: 1.35fr 1fr 235px; gap: 8px;
+    align-items: stretch; flex: 1; min-height: 0;
+  }
+  @media (max-width: 1400px) { .grid-sports { grid-template-columns: 1.2fr 1fr; } }
+  @media (max-width: 1200px) {
+    .grid-2col, .grid-sports { grid-template-columns: 1fr; }
+    .col-news .panel.grow { flex: none; }
+    .col-news .news-list { max-height: 260px; }
+  }
+  @media (max-width: 1400px) and (min-width: 1201px) {
+    .grid-sports .col-news { grid-column: 1 / -1; }
+    .grid-sports .col-news .panel.grow { flex: none; }
+    .grid-sports .col-news .news-list { max-height: 220px; }
+  }
   /* Below this a fifth track would squeeze the trading columns, so news
      drops to a full-width row underneath rather than disappearing. */
   @media (max-width: 1500px) {
@@ -164,6 +180,19 @@
   }
   .match a.match-title:hover { color: var(--green); text-decoration: underline; }
   .ext { font-size: 8px; color: var(--dim); margin-left: 4px; }
+
+  /* one-click $1 pick */
+  .bet {
+    font: inherit; font-size: 8.5px; letter-spacing: .04em;
+    background: transparent; color: var(--dim);
+    border: 1px solid var(--line); padding: 1px 5px; cursor: pointer;
+    margin-left: 5px; white-space: nowrap;
+  }
+  .bet:hover:not(:disabled) { color: var(--bg); background: var(--green); border-color: var(--green); }
+  .bet:disabled { opacity: .35; cursor: default; }
+  .bet.mine { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+  .match.picked { border-color: var(--cyan); }
+  .pick-note { font-size: 8.5px; color: var(--cyan); margin-top: 5px; }
 
   /* news */
   /* Only cap the list when it is not the panel absorbing the column's
@@ -381,6 +410,7 @@
       <div class="panel-body">
         <div class="pnl-big" id="pnl-val">$0.00</div>
         <canvas id="pnl-canvas"></canvas>
+        <div class="dim" id="pnl-why" style="font-size:9px; margin-top:6px; line-height:1.45"></div>
       </div>
     </div>
   </div>
@@ -436,24 +466,7 @@
 </div>
 
 <!-- ============ VISTA DEPORTES ============ -->
-<div class="grid-2col" id="view-sports" style="display:none">
-  <div class="col">
-    <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">SIMULACIÓN: BACKING AL FAVORITO</span>
-        <i class="info" data-key="predictions">i</i>
-        <span class="badge" id="pred-badge">—</span></div>
-      <div class="panel-body" id="pred-stats">
-        <div class="dim">cargando…</div>
-      </div>
-    </div>
-
-    <div class="panel grow">
-      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
-        <i class="info" data-key="news-sports">i</i></div>
-      <div class="filters" id="news-sports-filters"></div>
-      <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
-    </div>
-  </div>
+<div class="grid-sports" id="view-sports" style="display:none">
   <div class="col">
     <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS</span>
@@ -472,42 +485,62 @@
         <div class="dim" style="padding:6px">cargando partidos…</div>
       </div>
     </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">TU SIMULADOR · $1 POR PICK</span>
+        <i class="info" data-key="manual">i</i>
+        <span class="badge" id="manual-badge">—</span></div>
+      <div class="panel-body" id="manual-stats"><div class="dim">cargando…</div></div>
+    </div>
 
     <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">REGISTRO DE PREDICCIONES</span>
+      <div class="panel-head"><span class="slash">//</span><span class="t">SIMULACIÓN IA · $1 AL FAVORITO</span>
+        <i class="info" data-key="predictions">i</i>
+        <span class="badge" id="pred-badge">—</span></div>
+      <div class="panel-body" id="pred-stats"><div class="dim">cargando…</div></div>
+    </div>
+
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">REGISTRO</span>
         <i class="info" data-key="pred-log">i</i>
         <span class="badge" id="pred-log-count">—</span></div>
-      <div class="panel-body" style="max-height:230px; overflow-y:auto">
+      <div class="filters" id="pred-log-filters">
+        <button class="filt on" data-src="manual">TUYAS<span class="n"></span></button>
+        <button class="filt" data-src="ia">IA<span class="n"></span></button>
+      </div>
+      <div class="panel-body">
         <table>
-          <thead><tr><th>EVENTO</th><th>PICK</th><th>PROB</th><th>COSTE</th><th>RESULTADO</th><th>PNL</th></tr></thead>
+          <thead><tr><th>EVENTO</th><th>PICK</th><th>COSTE</th><th>PAGA</th><th>RESULT</th><th>PNL</th></tr></thead>
           <tbody id="pred-log"><tr><td colspan="6" class="dim">sin predicciones aún</td></tr></tbody>
         </table>
       </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">TABLAS DE LIGAS</span>
+        <i class="info" data-key="standings">i</i>
+        <span class="badge" id="standings-badge">—</span></div>
+      <div class="filters" id="standings-filters"></div>
+      <div class="panel-body" style="max-height:250px; overflow-y:auto" id="standings-body">
+        <div class="dim">cargando…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col col-news">
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
+        <i class="info" data-key="news-sports">i</i></div>
+      <div class="filters" id="news-sports-filters"></div>
+      <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
     </div>
   </div>
 </div>
 
 <!-- ============ VISTA DESTACADOS ============ -->
-<div class="grid-2col" id="view-trending" style="display:none">
-  <div class="col">
-    <div class="panel grow">
-      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
-        <i class="info" data-key="news-general">i</i></div>
-      <div class="filters" id="news-general-filters"></div>
-      <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">X / TWITTER</span>
-        <i class="info" data-key="x-pending">i</i>
-        <span class="badge amber">PENDIENTE</span></div>
-      <div class="panel-body">
-        <div class="dim" style="padding:4px 2px; line-height:1.5">
-          Requiere API key de pago (X Developer, plan Basic ~$100/mes).
-          Sin credenciales aún — ver el ícono ⓘ para instrucciones.
-        </div>
-      </div>
-    </div>
-  </div>
+<div class="grid-sports" id="view-trending" style="display:none">
   <div class="col">
     <div class="panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">SUCESOS DESTACADOS · POLYMARKET</span>
@@ -523,6 +556,48 @@
       <div class="sports-grid" id="trending-grid">
         <div class="dim" style="padding:6px">cargando…</div>
       </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">TU SIMULADOR · $1 POR PICK</span>
+        <i class="info" data-key="manual">i</i>
+        <span class="badge" id="manual-badge-t">—</span></div>
+      <div class="panel-body" id="manual-stats-t"><div class="dim">cargando…</div></div>
+    </div>
+
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">TUS PREDICCIONES</span>
+        <i class="info" data-key="pred-log">i</i>
+        <span class="badge" id="pred-log-count-t">—</span></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>EVENTO</th><th>PICK</th><th>COSTE</th><th>PAGA</th><th>RESULT</th><th>PNL</th></tr></thead>
+          <tbody id="pred-log-t"><tr><td colspan="6" class="dim">sin predicciones aún</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">X / TWITTER</span>
+        <i class="info" data-key="x-pending">i</i>
+        <span class="badge amber">PENDIENTE</span></div>
+      <div class="panel-body">
+        <div class="dim" style="padding:4px 2px; line-height:1.5">
+          Requiere API key de pago (X Developer, plan Basic ~$100/mes).
+          Sin credenciales aún — ver el ícono ⓘ para instrucciones.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col col-news">
+    <div class="panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
+        <i class="info" data-key="news-general">i</i></div>
+      <div class="filters" id="news-general-filters"></div>
+      <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
     </div>
   </div>
 </div>
@@ -553,7 +628,9 @@ const INFO = {
   "news-general": ["NOTICIAS", "Titulares de BBC World, Al Jazeera, NPR y TechCrunch — política, geopolítica y tecnología. Traducidos al español; el original en inglés aparece al pasar el ratón. Mismo criterio que los mercados de DESTACADOS: lo que mueve el mundo, no solo crypto o deportes."],
   "x-pending": ["X / TWITTER — PENDIENTE", "X cerró su API gratuita en 2023. Para conectar alertas en tiempo real hace falta una cuenta de X Developer con el plan Basic (~$100/mes) y un Bearer Token. Pasos: 1) entrar a developer.x.com y crear un proyecto, 2) suscribirse al plan Basic o superior, 3) generar el Bearer Token en las Keys & Tokens del proyecto, 4) pasar ese token aquí para conectar el feed. Sin eso no hay forma legal de traer datos de X en tiempo real."],
   trending: ["SUCESOS DESTACADOS · POLYMARKET", "Los eventos con más volumen negociado en las últimas 24h, de cualquier categoría — elecciones, banca central, geopolítica, deportes. Cada tarjeta muestra los resultados con mayor probabilidad ahora mismo, y el título enlaza al mercado en Polymarket. Filtros: CIERRAN PRONTO son los que resuelven en 7 días o menos; A LARGO PLAZO el resto. ABSURDOS son mercados reales pero peculiares — cuántas veces tuiteará Elon Musk esta semana, qué palabras dirá un CEO en su llamada de resultados, qué dirá MrBeast en su próximo vídeo. Se cuelan aparte porque mueven mucho menos dinero y quedarían enterrados por volumen."],
-  predictions: ["SIMULACIÓN: BACKING AL FAVORITO", "En cada partido apostamos 1 share al resultado que el mercado considera más probable (mínimo 55%), pagando el ask real — no el último precio negociado. Si acierta ganamos (1 − coste); si falla perdemos el coste. La cifra clave no es la tasa de acierto sino su distancia con la ESPERADA POR PRECIO: si el mercado cotiza un favorito a 70¢, debería ganar el 70% de las veces. Si gana menos, los favoritos están sobrevalorados. El backtest sobre 299 ventanas de BTC encontró exactamente eso — apostar contra el favorito en la banda 0.60-0.90 daba +2-4¢ por operación. Esta simulación comprueba si el mismo sesgo aparece en deportes. Cada pick se registra una sola vez y queda grabado en disco, así que el historial no se puede reescribir a posteriori."],
+  manual: ["TU SIMULADOR · $1 POR PICK", "Pulsa el botón $1→$X en cualquier resultado para apostar 1 dólar simulado a ese desenlace. El botón muestra lo que pagaría: a 25¢ un dólar compra 4 shares, así que devuelve $4 si aciertas y pierdes $1 si no. Se registra al precio del momento y no se puede cambiar después — un pick por evento. Se resuelve solo cuando el partido termina, comparando contra el resultado real de Polymarket. La cifra que importa no es cuánto aciertas sino la comparación con ESPERADA POR PRECIO: acertar el 80% suena bien, pero si apostabas a favoritos de 85¢ estabas perdiendo dinero."],
+  standings: ["TABLAS DE LIGAS", "Clasificaciones reales vía TheSportsDB para Liga 1 de Perú, Liga MX, LaLiga y MLS. El plan gratuito solo devuelve los cinco primeros de cada tabla, así que es un top 5, no la clasificación completa. MLS mezcla sus dos conferencias en la misma respuesta, por eso sus posiciones aparecen repetidas (1, 1, 2, 2...). Si una temporada aún no ha empezado se indica en vez de mostrar una tabla de ceros."],
+  predictions: ["SIMULACIÓN IA · $1 AL FAVORITO", "En cada partido apostamos 1 share al resultado que el mercado considera más probable (mínimo 55%), pagando el ask real — no el último precio negociado. Si acierta ganamos (1 − coste); si falla perdemos el coste. La cifra clave no es la tasa de acierto sino su distancia con la ESPERADA POR PRECIO: si el mercado cotiza un favorito a 70¢, debería ganar el 70% de las veces. Si gana menos, los favoritos están sobrevalorados. El backtest sobre 299 ventanas de BTC encontró exactamente eso — apostar contra el favorito en la banda 0.60-0.90 daba +2-4¢ por operación. Esta simulación comprueba si el mismo sesgo aparece en deportes. Cada pick se registra una sola vez y queda grabado en disco, así que el historial no se puede reescribir a posteriori."],
   "pred-log": ["REGISTRO DE PREDICCIONES", "Cada apuesta simulada con su probabilidad al momento de registrarla, lo que costó el share, y el resultado una vez el partido resolvió. Las abiertas siguen en juego. PNL está en céntimos por share."],
   sports: ["PARTIDOS", "Partidos reales de Polymarket que resuelven en las próximas 52 horas. El título enlaza al mercado en Polymarket. Filtros: HOY incluye los que están en juego; EN VIVO solo los que ya empezaron; MAÑANA suele estar vacío de madrugada porque Polymarket publica la jornada unas 24-36h antes; DESTACADOS ordena por volumen negociado. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
@@ -719,6 +796,20 @@ async function refresh() {
     $("pnl-val").textContent = ptxt;
     $("pnl-val").className = "pnl-big " + (pnl >= 0 ? "up" : "down");
     $("pnl-badge").textContent = ptxt;
+
+    // A flat line is indistinguishable from a broken feed unless the gate
+    // that is holding trades back is stated outright.
+    const gate = s.strategy_gate || {};
+    if (!gate.fills) {
+      const best = gate.best_pair_seen;
+      $("pnl-why").innerHTML = best == null
+        ? "sin operaciones aún — esperando primer libro completo"
+        : `0 operaciones: la estrategia exige que el par Up+Down cueste ≤ ${
+            Math.round((gate.max_pair_cost || 0) * 100)}¢ y el mejor visto en esta sesión es ${
+            (best * 100).toFixed(1)}¢. La curva está plana porque no hay nada que operar, no por falta de datos.`;
+    } else {
+      $("pnl-why").textContent = "";
+    }
     drawCurve($("pnl-canvas"), s.pnl_curve || []);
 
     // positions
@@ -861,14 +952,28 @@ function drawMatches(list, emptyMsg) {
 
   $("sports-grid").innerHTML = list.map(m => {
     const w = whenLabel(m);
+    const mine = myPicks[m.id];
     const pcts = wholePercents((m.outcomes || []).map(o => o.prob));
     const rows = (m.outcomes || []).map((o, i) => {
       const pct = pcts[i];
+      const label = o.kind === "draw" ? "Empate" : o.label;
+      const canBet = o.ask != null && betAllowed(o.ask) && !mine;
+      const isMine = mine && mine.pick === label;
+      // $1 buys 1/price shares, so the payout is what the stake returns.
+      const payout = o.ask ? (1 / o.ask).toFixed(2) : "—";
       return `<div class="oc">
-        <span class="oc-name">${o.kind === "draw" ? "Empate" : o.label}</span>
+        <span class="oc-name">${label}</span>
         <span class="oc-bar"><span class="oc-fill" style="width:${pct}%"></span></span>
         <span class="oc-pct">${pct}%</span>
         <span class="oc-ask">${o.ask == null ? "—" : Math.round(o.ask * 100) + "¢"}</span>
+        <button class="bet${isMine ? " mine" : ""}" ${canBet ? "" : "disabled"}
+          data-ev="${m.id}" data-pick="${label.replace(/"/g, "&quot;")}"
+          data-ask="${o.ask == null ? "" : o.ask}" data-prob="${o.prob}"
+          data-title="${m.title.replace(/"/g, "&quot;")}" data-url="${m.url}"
+          data-league="${(m.league || "").replace(/"/g, "&quot;")}"
+          data-disc="${m.discipline || ""}"
+          title="${isMine ? "tu pick" : "apostar $1 · paga $" + payout}"
+          >${isMine ? "TU PICK" : "$1→$" + payout}</button>
       </div>`;
     }).join("");
 
@@ -880,7 +985,7 @@ function drawMatches(list, emptyMsg) {
       vig = `<span class="vig-ok">suma ${(m.overround * 100).toFixed(1)}¢</span>`;
     }
 
-    return `<div class="match">
+    return `<div class="match${mine ? " picked" : ""}">
       <div class="match-top">
         <span class="match-league">${(m.league || m.sport || "").toUpperCase()}</span>
         <span class="match-when${w.live ? " live" : ""}">${w.text}</span>
@@ -888,12 +993,57 @@ function drawMatches(list, emptyMsg) {
       <a class="match-title" href="${m.url}" target="_blank" rel="noopener noreferrer"
          title="Abrir en Polymarket">${m.title}<span class="ext">↗</span></a>
       ${rows}
+      ${mine ? `<div class="pick-note">tu pick: ${mine.pick} @ ${Math.round(mine.pick_ask * 100)}¢ · ${
+          mine.resolved
+            ? (mine.won ? "ACERTASTE +$" + mine.pnl.toFixed(2) : "fallaste −$" + Math.abs(mine.pnl).toFixed(2))
+            : "en juego"
+        }</div>` : ""}
       <div class="match-foot">
         <span>liq $${(m.liquidity / 1000).toFixed(0)}K · vol24h $${(m.volume_24h / 1000).toFixed(0)}K</span>
         ${vig}
       </div>
     </div>`;
   }).join("");
+  wireBetButtons("sports-grid");
+}
+
+/* ---------------- picks manuales ---------------- */
+let myPicks = {};      // event_id -> prediction
+
+// Mirrors the server's band. Outside it the market has already decided:
+// a 0.1c outcome would show "$1 → $1000", which is a dead ticket, not a bet.
+const MIN_PICK_PRICE = 0.02, MAX_PICK_PRICE = 0.97;
+const betAllowed = p => p != null && p >= MIN_PICK_PRICE && p <= MAX_PICK_PRICE;
+
+function wireBetButtons(containerId) {
+  document.querySelectorAll(`#${containerId} .bet:not([disabled])`).forEach(btn => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const r = await fetch("/api/predictions/manual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event_id: btn.dataset.ev,
+            title: btn.dataset.title,
+            url: btn.dataset.url,
+            pick: btn.dataset.pick,
+            pick_ask: parseFloat(btn.dataset.ask),
+            pick_prob: parseFloat(btn.dataset.prob),
+            league: btn.dataset.league,
+            discipline: btn.dataset.disc,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert(data.error || "no se pudo registrar"); btn.disabled = false; return; }
+        await refreshPredictions();
+        // Redraw so the card shows the pick immediately.
+        if (containerId === "sports-grid") applySportsFilter(); else applyTrendingFilter();
+      } catch (e) {
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 async function refreshSports() {
@@ -965,65 +1115,167 @@ async function refreshNews(category, elId) {
   }
 }
 
-/* ---------------- simulación: backing al favorito ---------------- */
-function renderPredictions(data) {
-  const s = data.stats || {};
-  $("pred-badge").textContent = s.resolved
-    ? s.resolved + " RESUELTAS"
-    : (s.pending || 0) + " ABIERTAS";
+/* ---------------- simuladores ---------------- */
+let predLogSource = "manual";
+let predData = { ia: {}, manual: {} };
 
+function statsBlock(s, isIa) {
   const hit = s.hit_rate == null ? null : s.hit_rate * 100;
   const exp = s.expected_hit_rate == null ? null : s.expected_hit_rate * 100;
-  const pnlCls = (s.pnl || 0) > 0 ? "up" : (s.pnl || 0) < 0 ? "down" : "dim";
+  const pnl = s.pnl || 0;
+  const cls = pnl > 0 ? "up" : pnl < 0 ? "down" : "dim";
 
   // The gap between realised and expected hit rate is the whole experiment:
-  // if favourites win less often than their price implies, they are overpriced.
-  let verdict = '<span class="dim">sin resolver aún — hacen falta decenas de partidos</span>';
+  // if picks win less often than their price implies, they were overpriced.
+  let verdict = s.total
+    ? '<span class="dim">esperando resultados de los partidos</span>'
+    : (isIa
+        ? '<span class="dim">aún sin picks</span>'
+        : '<span class="dim">pulsa $1→$X en cualquier resultado para apostar</span>');
   if (s.resolved >= 10 && hit != null && exp != null) {
     const diff = hit - exp;
     verdict = Math.abs(diff) < 2
-      ? `<span class="dim">el favorito gana casi exactamente lo que el mercado predice (${diff >= 0 ? "+" : ""}${diff.toFixed(1)} pts)</span>`
+      ? `<span class="dim">aciertas casi exactamente lo que el precio predecía (${diff >= 0 ? "+" : ""}${diff.toFixed(1)} pts)</span>`
       : diff < 0
-        ? `<span class="amber">el favorito gana ${Math.abs(diff).toFixed(1)} pts MENOS de lo que cotiza — coherente con el sesgo del favorito</span>`
-        : `<span class="up">el favorito gana ${diff.toFixed(1)} pts MÁS de lo que cotiza</span>`;
+        ? `<span class="amber">aciertas ${Math.abs(diff).toFixed(1)} pts MENOS de lo que cotizaban — picks sobrevalorados</span>`
+        : `<span class="up">aciertas ${diff.toFixed(1)} pts MÁS de lo que cotizaban</span>`;
   }
 
-  $("pred-stats").innerHTML = `
-    <div class="sstat"><span>apuestas resueltas</span><b>${s.resolved || 0}</b></div>
-    <div class="sstat"><span>abiertas</span><b class="amber">${s.pending || 0}</b></div>
-    <div class="sstat"><span>aciertos</span><b class="up">${s.wins || 0}</b></div>
-    <div class="sstat"><span>fallos</span><b class="down">${s.losses || 0}</b></div>
+  return `
+    <div class="sstat"><span>resueltas</span><b>${s.resolved || 0}</b></div>
+    <div class="sstat"><span>en juego</span><b class="amber">${s.pending || 0} ($${(s.open_stake || 0).toFixed(0)})</b></div>
+    <div class="sstat"><span>aciertos / fallos</span><b><span class="up">${s.wins || 0}</span> / <span class="down">${s.losses || 0}</span></b></div>
     <div class="sstat"><span>tasa de acierto</span><b>${hit == null ? "—" : hit.toFixed(1) + "%"}</b></div>
     <div class="sstat"><span>esperada por precio</span><b class="cyan">${exp == null ? "—" : exp.toFixed(1) + "%"}</b></div>
-    <div class="sstat"><span>PnL (1 share/pick)</span><b class="${pnlCls}">${(s.pnl || 0) >= 0 ? "+" : ""}$${(s.pnl || 0).toFixed(2)}</b></div>
-    <div class="sstat"><span>ROI</span><b class="${pnlCls}">${s.roi == null ? "—" : (s.roi * 100).toFixed(1) + "%"}</b></div>
+    <div class="sstat"><span>invertido</span><b class="dim">$${(s.staked || 0).toFixed(0)}</b></div>
+    <div class="sstat"><span>PnL</span><b class="${cls}">${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}</b></div>
+    <div class="sstat"><span>ROI</span><b class="${cls}">${s.roi == null ? "—" : (s.roi * 100).toFixed(1) + "%"}</b></div>
     <div style="margin-top:8px; line-height:1.45; font-size:10px">${verdict}</div>`;
+}
 
-  const rows = data.recent || [];
-  $("pred-log-count").textContent = rows.length + " PICKS";
-  $("pred-log").innerHTML = rows.length ? rows.map(p => {
+function logRows(rows) {
+  if (!rows.length) return '<tr><td colspan="6" class="dim">sin predicciones aún</td></tr>';
+  return rows.map(p => {
     const res = !p.resolved
-      ? '<span class="amber">abierta</span>'
+      ? '<span class="amber">en juego</span>'
       : p.won ? '<span class="up">ACIERTO</span>' : '<span class="down">fallo</span>';
     const pnl = !p.resolved ? '<span class="dim">—</span>'
-      : `<span class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : ""}${(p.pnl * 100).toFixed(0)}¢</span>`;
+      : `<span class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : "−"}$${Math.abs(p.pnl).toFixed(2)}</span>`;
     return `<tr>
       <td><a href="${p.url}" target="_blank" rel="noopener noreferrer"
-             style="color:inherit">${p.title.slice(0, 40)}</a></td>
-      <td>${p.pick.slice(0, 18)}</td>
-      <td class="dim">${Math.round(p.pick_prob * 100)}%</td>
+             style="color:inherit">${p.title.slice(0, 34)}</a></td>
+      <td>${p.pick.slice(0, 16)}</td>
       <td class="dim">${Math.round(p.pick_ask * 100)}¢</td>
+      <td class="dim">$${(p.payout || 0).toFixed(2)}</td>
       <td>${res}</td><td>${pnl}</td></tr>`;
-  }).join("") : '<tr><td colspan="6" class="dim">sin predicciones aún</td></tr>';
+  }).join("");
+}
+
+function renderPredictions(data) {
+  predData = data;
+  const ia = data.ia || { stats: {}, recent: [] };
+  const man = data.manual || { stats: {}, recent: [] };
+
+  // Cards read their own pick state from here.
+  myPicks = {};
+  (man.recent || []).forEach(p => { myPicks[p.event_id] = p; });
+
+  const iaS = ia.stats || {}, manS = man.stats || {};
+
+  if ($("pred-badge")) {
+    $("pred-badge").textContent = iaS.resolved
+      ? iaS.resolved + " RESUELTAS" : (iaS.pending || 0) + " EN JUEGO";
+    $("pred-stats").innerHTML = statsBlock(iaS, true);
+  }
+  ["manual-badge", "manual-badge-t"].forEach(id => {
+    if ($(id)) $(id).textContent = manS.total
+      ? `${manS.resolved || 0}/${manS.total}` : "SIN PICKS";
+  });
+  ["manual-stats", "manual-stats-t"].forEach(id => {
+    if ($(id)) $(id).innerHTML = statsBlock(manS, false);
+  });
+
+  // Sports view: one table with a source toggle. Trending: only your picks.
+  if ($("pred-log")) {
+    const rows = predLogSource === "ia" ? (ia.recent || []) : (man.recent || []);
+    $("pred-log-count").textContent = rows.length + " PICKS";
+    $("pred-log").innerHTML = logRows(rows);
+    document.querySelectorAll("#pred-log-filters .filt").forEach(b => {
+      const n = b.dataset.src === "ia" ? (iaS.total || 0) : (manS.total || 0);
+      b.querySelector(".n").textContent = n ? " " + n : "";
+      b.classList.toggle("on", b.dataset.src === predLogSource);
+    });
+  }
+  if ($("pred-log-t")) {
+    $("pred-log-count-t").textContent = (man.recent || []).length + " PICKS";
+    $("pred-log-t").innerHTML = logRows(man.recent || []);
+  }
 }
 
 async function refreshPredictions() {
-  if (currentView !== "sports") return;
+  if (currentView === "crypto") return;
   try {
     const r = await fetch("/api/predictions");
     renderPredictions(await r.json());
+  } catch (e) { /* leave the last good render on screen */ }
+}
+
+/* ---------------- tablas de ligas ---------------- */
+let standingsData = [];
+let standingsPick = null;
+
+function renderStandings(data) {
+  standingsData = data.leagues || [];
+  if (!standingsData.length) {
+    $("standings-body").innerHTML = '<div class="dim">no disponible</div>';
+    return;
+  }
+  if (!standingsPick) standingsPick = standingsData[0].key;
+
+  $("standings-filters").innerHTML = standingsData.map(l =>
+    `<button class="filt${l.key === standingsPick ? " on" : ""}" data-l="${l.key}">${l.label}</button>`
+  ).join("");
+  document.querySelectorAll("#standings-filters .filt").forEach(b => {
+    b.addEventListener("click", () => { standingsPick = b.dataset.l; renderStandings({ leagues: standingsData }); });
+  });
+
+  const lg = standingsData.find(l => l.key === standingsPick) || standingsData[0];
+  $("standings-badge").textContent = lg.country.toUpperCase();
+
+  if (lg.error) {
+    $("standings-body").innerHTML = `<div class="dim">no se pudo cargar (${lg.error})</div>`;
+    return;
+  }
+  if (!lg.started) {
+    $("standings-body").innerHTML =
+      `<div class="dim" style="padding:4px 0">temporada ${lg.season} aún no comenzada — todos los equipos a 0 partidos</div>`;
+    return;
+  }
+
+  // MLS interleaves its two conferences, which is why ranks repeat.
+  const hasConf = lg.rows.some(r => r.conference);
+  $("standings-body").innerHTML = `
+    <table>
+      <thead><tr><th>#</th><th>EQUIPO</th><th>PJ</th><th>DG</th><th>PTS</th></tr></thead>
+      <tbody>${lg.rows.map(r => `<tr>
+        <td class="dim">${r.rank}</td>
+        <td>${r.team}${r.conference ? ` <span class="dim" style="font-size:8px">${r.conference}</span>` : ""}</td>
+        <td class="dim">${r.played}</td>
+        <td class="${r.goal_diff > 0 ? "up" : r.goal_diff < 0 ? "down" : "dim"}">${r.goal_diff > 0 ? "+" : ""}${r.goal_diff}</td>
+        <td><b>${r.points}</b></td></tr>`).join("")}</tbody>
+    </table>
+    <div class="dim" style="font-size:8.5px; margin-top:6px; line-height:1.4">
+      top ${lg.limited_to} · límite del plan gratuito de TheSportsDB${hasConf ? " · MLS combina ambas conferencias, por eso se repiten las posiciones" : ""}
+    </div>`;
+}
+
+async function refreshStandings() {
+  if (currentView !== "sports") return;
+  try {
+    const r = await fetch("/api/standings");
+    renderStandings(await r.json());
   } catch (e) {
-    $("pred-stats").innerHTML = '<div class="dim">no se pudo cargar</div>';
+    $("standings-body").innerHTML = '<div class="dim">no se pudo cargar</div>';
   }
 }
 
@@ -1077,12 +1329,24 @@ function drawTrending(list, emptyMsg) {
   }
 
   $("trending-grid").innerHTML = list.map(e => {
+    const mine = myPicks[e.id];
     const rows = (e.outcomes || []).map(o => {
       const pct = Math.round((o.prob || 0) * 100);
+      const price = o.prob;
+      const canBet = betAllowed(price) && !mine;
+      const isMine = mine && mine.pick === o.label;
+      const payout = price ? (1 / price).toFixed(2) : "—";
       return `<div class="oc">
         <span class="oc-name trend-oc-name">${o.label}</span>
         <span class="oc-bar"><span class="oc-fill" style="width:${pct}%"></span></span>
         <span class="oc-pct">${pct}%</span>
+        <button class="bet${isMine ? " mine" : ""}" ${canBet ? "" : "disabled"}
+          data-ev="${e.id}" data-pick="${o.label.replace(/"/g, "&quot;")}"
+          data-ask="${price}" data-prob="${price}"
+          data-title="${e.title.replace(/"/g, "&quot;")}" data-url="${e.url}"
+          data-league="${(e.category || "").replace(/"/g, "&quot;")}" data-disc="trending"
+          title="${isMine ? "tu pick" : "apostar $1 · paga $" + payout}"
+          >${isMine ? "TU PICK" : "$1→$" + payout}</button>
       </div>`;
     }).join("");
 
@@ -1090,7 +1354,7 @@ function drawTrending(list, emptyMsg) {
       ? (e.ends_in_days < 1 ? "cierra <1d" : `cierra en ${e.ends_in_days}d`)
       : "";
 
-    return `<div class="match">
+    return `<div class="match${mine ? " picked" : ""}">
       <div class="match-top">
         <span class="match-league">${(e.category || "").toUpperCase()}</span>
         <span class="match-when">${ends}</span>
@@ -1098,11 +1362,17 @@ function drawTrending(list, emptyMsg) {
       <a class="match-title" href="${e.url}" target="_blank" rel="noopener noreferrer"
          title="Abrir en Polymarket">${e.title}<span class="ext">↗</span></a>
       ${rows}
+      ${mine ? `<div class="pick-note">tu pick: ${mine.pick} @ ${Math.round(mine.pick_ask * 100)}¢ · ${
+          mine.resolved
+            ? (mine.won ? "ACERTASTE +$" + mine.pnl.toFixed(2) : "fallaste −$" + Math.abs(mine.pnl).toFixed(2))
+            : "en juego"
+        }</div>` : ""}
       <div class="match-foot">
         <span>liq $${(e.liquidity / 1000).toFixed(0)}K · vol24h $${(e.volume_24h / 1000).toFixed(0)}K</span>
       </div>
     </div>`;
   }).join("");
+  wireBetButtons("trending-grid");
 }
 
 async function refreshTrending() {
@@ -1141,9 +1411,12 @@ document.querySelectorAll(".tab").forEach(btn => {
       b.classList.toggle("active", b === btn));
     VIEWS.forEach(v => { $("view-" + v).style.display = v === currentView ? "" : "none"; });
     if (currentView === "sports") {
-      refreshSports(); refreshNews("sports", "news-sports"); refreshPredictions();
+      refreshSports(); refreshNews("sports", "news-sports");
+      refreshPredictions(); refreshStandings();
     }
-    if (currentView === "trending") { refreshTrending(); refreshNews("general", "news-general"); }
+    if (currentView === "trending") {
+      refreshTrending(); refreshNews("general", "news-general"); refreshPredictions();
+    }
   });
 });
 
@@ -1154,6 +1427,14 @@ setInterval(refresh, 3000);
 setInterval(refreshSports, 30000);
 setInterval(refreshTrending, 60000);
 setInterval(refreshPredictions, 30000);
+setInterval(refreshStandings, 600000);
+
+document.querySelectorAll("#pred-log-filters .filt").forEach(btn => {
+  btn.addEventListener("click", () => {
+    predLogSource = btn.dataset.src;
+    renderPredictions(predData);
+  });
+});
 setInterval(() => {
   refreshNews("crypto", "news-crypto");
   if (currentView === "sports") refreshNews("sports", "news-sports");

@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import httpx
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from dataclasses import asdict
+from fastapi import Body, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -33,6 +34,8 @@ from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
 from moneyclush.data.news import fetch_headlines
 from moneyclush.data.news import to_rows as news_to_rows
 from moneyclush.data.predictions import PredictionLedger
+from moneyclush.data.standings import fetch_standings
+from moneyclush.data.standings import to_rows as standings_to_rows
 from moneyclush.data.sports import fetch_todays_matches, to_rows
 from moneyclush.data.trending import fetch_trending
 from moneyclush.data.trending import to_rows as trending_to_rows
@@ -71,6 +74,8 @@ STATE: dict = {
     "scanner": [],
     "pnl_curve": [],
     "paper_pnl": 0.0,
+    "best_pair_seen": None,
+    "strategy_gate": {},
     "paper_trades": [],
     "positions": {},
     "alerts": [],
@@ -121,6 +126,16 @@ TRENDING_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 PREDICTIONS = PredictionLedger(path=DATA_DIR / "predictions.jsonl")
 PREDICTION_MIN_PROB = 0.55
 PREDICTION_INTERVAL = 120.0
+PREDICTION_STAKE = 1.0
+
+# Outside this band the market has effectively already resolved, so a pick
+# there is not a forecast — it is either a certainty or a dead ticket.
+MIN_PICK_PRICE = 0.02
+MAX_PICK_PRICE = 0.97
+
+# League tables refresh once a day upstream; hourly here is already generous.
+STANDINGS_TTL = 1800.0
+STANDINGS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
 
 
@@ -418,6 +433,10 @@ async def poll_loop() -> None:
                             fv = fv_engine.evaluate(state_obj)
                             imb = order_book_imbalance(book_up)
                             pair = combined_pair_cost(book_up, book_down, 25)
+                            if pair is not None:
+                                best = STATE.get("best_pair_seen")
+                                if best is None or pair < best:
+                                    STATE["best_pair_seen"] = pair
 
                             row.update({
                                 "best_bid_up": book_up.best_bid,
@@ -602,6 +621,19 @@ async def poll_loop() -> None:
                 STATE["pnl_curve"].append([now_ms, round(STATE["paper_pnl"], 2)])
                 STATE["pnl_curve"] = STATE["pnl_curve"][-600:]
 
+                # A flat curve is indistinguishable from a broken one unless
+                # the reason is on screen. The strategy needs the Up+Down pair
+                # under `max_pair_cost`; in practice it sits just above $1, so
+                # recording the best pair seen explains the silence.
+                STATE["strategy_gate"] = {
+                    "max_pair_cost": strategy.max_pair_cost,
+                    "best_pair_seen": (
+                        round(STATE["best_pair_seen"], 4)
+                        if STATE.get("best_pair_seen") is not None else None
+                    ),
+                    "fills": STATE["stats"]["fills"],
+                }
+
                 scanner_rows.sort(key=lambda r: r["edge"], reverse=True)
                 STATE["markets"] = market_rows
                 STATE["scanner"] = scanner_rows
@@ -649,7 +681,7 @@ async def prediction_loop() -> None:
             if added or settled:
                 log.info("predictions.tick", added=added, settled=settled)
             if settled:
-                stats = PREDICTIONS.stats()
+                stats = PREDICTIONS.stats("ia")
                 add_alert(
                     "info",
                     f"{settled} predicción(es) resueltas · acierto "
@@ -778,14 +810,95 @@ async def get_trending() -> JSONResponse:
 
 @app.get("/api/predictions")
 async def get_predictions() -> JSONResponse:
-    """Favourite-backing ledger: settled record plus what is still open."""
+    """Both ledgers side by side: the automatic picks and the user's own."""
     return JSONResponse(
         {
-            "stats": PREDICTIONS.stats(),
-            "recent": PREDICTIONS.recent(60),
+            "ia": {
+                "stats": PREDICTIONS.stats("ia"),
+                "recent": PREDICTIONS.recent(60, "ia"),
+            },
+            "manual": {
+                "stats": PREDICTIONS.stats("manual"),
+                "recent": PREDICTIONS.recent(60, "manual"),
+            },
             "min_prob": PREDICTION_MIN_PROB,
+            "stake": PREDICTION_STAKE,
         }
     )
+
+
+@app.post("/api/predictions/manual")
+async def post_manual_prediction(payload: dict = Body(...)) -> JSONResponse:
+    """Record a pick the user made by hand, at the price showing right now."""
+    required = ("event_id", "title", "pick", "pick_ask")
+    missing = [f for f in required if payload.get(f) in (None, "")]
+    if missing:
+        return JSONResponse(
+            {"error": f"faltan campos: {', '.join(missing)}"}, status_code=400
+        )
+
+    event_id = str(payload["event_id"])
+    if PREDICTIONS.has_manual(event_id):
+        return JSONResponse(
+            {"error": "ya hay una predicción tuya en este evento"}, status_code=409
+        )
+
+    try:
+        ask = float(payload["pick_ask"])
+        prob = float(payload.get("pick_prob") or ask)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "precio inválido"}, status_code=400)
+
+    # Both extremes are already-decided markets: a side at 1 has won, and one
+    # at a fraction of a cent has lost. Neither is a prediction worth logging.
+    if not MIN_PICK_PRICE <= ask <= MAX_PICK_PRICE:
+        return JSONResponse(
+            {
+                "error": (
+                    f"ese resultado cotiza a {ask * 100:.1f}¢ — fuera del rango "
+                    f"apostable ({MIN_PICK_PRICE * 100:.0f}¢–{MAX_PICK_PRICE * 100:.0f}¢). "
+                    "Está prácticamente resuelto."
+                )
+            },
+            status_code=400,
+        )
+
+    prediction = PREDICTIONS.record_manual(
+        event_id=event_id,
+        title=str(payload["title"]),
+        url=str(payload.get("url") or ""),
+        pick=str(payload["pick"]),
+        pick_prob=prob,
+        pick_ask=ask,
+        league=str(payload.get("league") or ""),
+        discipline=str(payload.get("discipline") or ""),
+        stake=PREDICTION_STAKE,
+    )
+    add_alert(
+        "info",
+        f"Predicción manual: {prediction.pick} @ {ask * 100:.0f}¢ "
+        f"· paga ${prediction.potential_payout:.2f}",
+    )
+    return JSONResponse({"ok": True, "prediction": asdict(prediction)})
+
+
+@app.get("/api/standings")
+async def get_standings() -> JSONResponse:
+    now = time.time()
+    if STANDINGS_CACHE["rows"] and now - STANDINGS_CACHE["fetched_at"] < STANDINGS_TTL:
+        return JSONResponse({"leagues": STANDINGS_CACHE["rows"], "cached": True})
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            standings = await fetch_standings(client)
+        rows = standings_to_rows(standings)
+        STANDINGS_CACHE.update(rows=rows, fetched_at=now, error=None)
+        return JSONResponse({"leagues": rows, "cached": False})
+    except Exception as exc:
+        log.warning("standings.fetch_failed", error=str(exc)[:120])
+        return JSONResponse(
+            {"leagues": STANDINGS_CACHE["rows"], "cached": True, "error": str(exc)[:120]}
+        )
 
 
 @app.get("/")

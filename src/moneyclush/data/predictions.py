@@ -44,20 +44,34 @@ class Prediction:
     discipline: str
     pick: str                     # outcome we backed
     pick_prob: float              # normalised probability at pick time
-    pick_ask: float               # what one share cost
+    pick_ask: float               # price per share at pick time
     recorded_at: str
     start_time: str | None = None
+    source: str = "ia"            # "ia" (automatic) | "manual" (user pick)
+    stake: float = 1.0            # dollars committed
     resolved: bool = False
     won: bool | None = None
     winner: str | None = None
     resolved_at: str | None = None
 
     @property
+    def shares(self) -> float:
+        """A $1 stake buys 1/price shares, each settling at $1 or nothing."""
+        if self.pick_ask <= 0:
+            return 0.0
+        return self.stake / self.pick_ask
+
+    @property
     def pnl(self) -> float:
-        """Profit on one share; zero while the fixture is still open."""
+        """Profit in dollars; zero while the fixture is still open."""
         if not self.resolved or self.won is None:
             return 0.0
-        return (1.0 - self.pick_ask) if self.won else -self.pick_ask
+        return (self.shares - self.stake) if self.won else -self.stake
+
+    @property
+    def potential_payout(self) -> float:
+        """What the stake returns if the pick lands."""
+        return self.shares
 
 
 def _loads(value, default):
@@ -131,9 +145,23 @@ class PredictionLedger:
                 data = json.loads(line)
             except ValueError:
                 continue
-            # Later lines for the same event supersede earlier ones, which is
+            # Tolerate rows written before a field existed rather than
+            # discarding history on every schema change.
+            data.pop("pnl", None)
+            known = Prediction.__dataclass_fields__.keys()
+            filtered = {k: v for k, v in data.items() if k in known}
+            try:
+                prediction = Prediction(**filtered)
+            except TypeError:
+                continue
+            # Later lines for the same key supersede earlier ones, which is
             # how a pick recorded as pending becomes a resolved one.
-            self.predictions[data["event_id"]] = Prediction(**data)
+            self.predictions[self._key(prediction)] = prediction
+
+    @staticmethod
+    def _key(prediction: Prediction) -> str:
+        """Automatic and manual picks coexist on the same fixture."""
+        return f"{prediction.source}:{prediction.event_id}"
 
     def _append(self, prediction: Prediction) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +176,7 @@ class PredictionLedger:
         """
         added = 0
         for match in matches:
-            if match.event_id in self.predictions:
+            if f"ia:{match.event_id}" in self.predictions:
                 continue
             favourite = match.favourite()
             if favourite is None:
@@ -173,11 +201,42 @@ class PredictionLedger:
                 pick_ask=round(outcome.best_ask, 4),
                 recorded_at=datetime.now(timezone.utc).isoformat(),
                 start_time=match.start_time.isoformat() if match.start_time else None,
+                source="ia",
             )
-            self.predictions[match.event_id] = prediction
+            self.predictions[self._key(prediction)] = prediction
             self._append(prediction)
             added += 1
         return added
+
+    def record_manual(
+        self,
+        event_id: str,
+        title: str,
+        url: str,
+        pick: str,
+        pick_prob: float,
+        pick_ask: float,
+        league: str = "",
+        discipline: str = "",
+        stake: float = 1.0,
+    ) -> Prediction:
+        """A pick the user made by hand, priced the same way as an automatic one."""
+        prediction = Prediction(
+            event_id=event_id,
+            title=title,
+            url=url,
+            league=league,
+            discipline=discipline,
+            pick=pick,
+            pick_prob=round(pick_prob, 4),
+            pick_ask=round(pick_ask, 4),
+            recorded_at=datetime.now(timezone.utc).isoformat(),
+            source="manual",
+            stake=stake,
+        )
+        self.predictions[self._key(prediction)] = prediction
+        self._append(prediction)
+        return prediction
 
     def pending(self) -> list[Prediction]:
         return [p for p in self.predictions.values() if not p.resolved]
@@ -218,19 +277,23 @@ class PredictionLedger:
 
         return settled
 
-    def stats(self) -> dict:
-        resolved = [p for p in self.predictions.values() if p.resolved]
+    def stats(self, source: str | None = None) -> dict:
+        picks = [
+            p for p in self.predictions.values()
+            if source is None or p.source == source
+        ]
+        resolved = [p for p in picks if p.resolved]
         wins = sum(1 for p in resolved if p.won)
         pnl = sum(p.pnl for p in resolved)
-        staked = sum(p.pick_ask for p in resolved)
+        staked = sum(p.stake for p in resolved)
 
         # Expected hit rate if the market's prices are honest. Comparing the
         # realised rate against this is the whole point of the exercise.
         expected = sum(p.pick_prob for p in resolved)
 
         return {
-            "total": len(self.predictions),
-            "pending": len(self.predictions) - len(resolved),
+            "total": len(picks),
+            "pending": len(picks) - len(resolved),
             "resolved": len(resolved),
             "wins": wins,
             "losses": len(resolved) - wins,
@@ -238,21 +301,29 @@ class PredictionLedger:
             "expected_hit_rate": (
                 round(expected / len(resolved), 4) if resolved else None
             ),
+            "staked": round(staked, 2),
             "pnl": round(pnl, 4),
             "pnl_per_trade": round(pnl / len(resolved), 4) if resolved else None,
             "roi": round(pnl / staked, 4) if staked > 0 else None,
+            "open_stake": round(sum(p.stake for p in picks if not p.resolved), 2),
         }
 
-    def recent(self, limit: int = 40) -> list[dict]:
+    def recent(self, limit: int = 40, source: str | None = None) -> list[dict]:
+        picks = [
+            p for p in self.predictions.values()
+            if source is None or p.source == source
+        ]
         ordered = sorted(
-            self.predictions.values(),
-            key=lambda p: (p.resolved_at or p.recorded_at),
-            reverse=True,
+            picks, key=lambda p: (p.resolved_at or p.recorded_at), reverse=True
         )
         return [
             {
                 **asdict(p),
                 "pnl": round(p.pnl, 4),
+                "payout": round(p.potential_payout, 4),
             }
             for p in ordered[:limit]
         ]
+
+    def has_manual(self, event_id: str) -> bool:
+        return f"manual:{event_id}" in self.predictions
