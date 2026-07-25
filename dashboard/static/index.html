@@ -65,6 +65,45 @@
   @media (max-width: 900px)  { .grid { grid-template-columns: 1fr; } .col { display: flex; } .col-3 { display: flex; } }
 
   .panel { border: 1px solid var(--border); background: var(--panel); }
+  .tabs { display: flex; gap: 2px; margin-left: 14px; }
+  .tab {
+    font: inherit; font-size: 10px; letter-spacing: .08em;
+    background: transparent; color: var(--dim);
+    border: 1px solid var(--line); padding: 3px 11px; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--bg); background: var(--green); border-color: var(--green); }
+
+  /* sports view */
+  .sports-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 10px; padding: 10px;
+  }
+  .match {
+    border: 1px solid var(--line); background: var(--panel); padding: 9px 10px;
+  }
+  .match-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; margin-bottom: 7px;
+  }
+  .match-league { font-size: 9px; color: var(--dim); letter-spacing: .07em; }
+  .match-when { font-size: 9px; color: var(--amber); white-space: nowrap; }
+  .match-when.live { color: var(--red); font-weight: 700; }
+  .match-title { font-size: 11px; color: var(--text); margin-bottom: 8px; }
+  .oc { display: flex; align-items: center; gap: 7px; margin: 3px 0; font-size: 10px; }
+  .oc-name { flex: 1; color: var(--dim); overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; }
+  .oc-bar { width: 78px; height: 7px; background: #0d1a12; border: 1px solid var(--line); }
+  .oc-fill { height: 100%; background: var(--green); }
+  .oc-pct { width: 30px; text-align: right; color: var(--text); font-weight: 600; }
+  .oc-ask { width: 34px; text-align: right; color: var(--dim); font-size: 9px; }
+  .match-foot {
+    display: flex; justify-content: space-between; margin-top: 7px;
+    padding-top: 6px; border-top: 1px solid var(--line); font-size: 9px; color: var(--dim);
+  }
+  .vig-ok { color: var(--dim); }
+  .vig-arb { color: var(--green); font-weight: 700; }
+
   .panel-head {
     display: flex; align-items: center; gap: 8px;
     padding: 7px 10px;
@@ -177,13 +216,17 @@
   <div class="hstat">SOL <b id="h-sol">—</b></div>
   <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
   <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
+  <div class="tabs">
+    <button class="tab active" data-view="crypto">CRYPTO</button>
+    <button class="tab" data-view="sports">DEPORTES</button>
+  </div>
   <div class="spacer"></div>
   <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
   <div class="mode-chip">PAPER MODE</div>
   <div class="hstat" id="h-clock">--:--:--</div>
 </header>
 
-<div class="grid">
+<div class="grid" id="view-crypto">
 
   <!-- ============ SIDEBAR ============ -->
   <div class="col">
@@ -302,6 +345,19 @@
   </div>
 </div>
 
+<!-- ============ VISTA DEPORTES ============ -->
+<div id="view-sports" style="display:none">
+  <div class="panel" style="margin:10px">
+    <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS DE HOY</span>
+      <i class="info" data-key="sports">i</i>
+      <span class="badge" id="sports-count">—</span>
+      <span class="badge amber" id="sports-age" style="display:none">—</span></div>
+    <div class="sports-grid" id="sports-grid">
+      <div class="dim" style="padding:6px">cargando partidos…</div>
+    </div>
+  </div>
+</div>
+
 <div class="footer-note">
   datos: gamma-api.polymarket.com + clob.polymarket.com + okx/coinbase spot &middot; refresh 3s &middot; ejecución simulada (paper) — sin órdenes reales
 </div>
@@ -323,6 +379,7 @@ const INFO = {
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "PnL acumulado del paper trading. Solo cambia cuando una ventana se resuelve: cada posición paga $1 por share ganadora menos lo invertido. La curva plana significa que hay posiciones abiertas esperando resolución."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
+  sports: ["PARTIDOS DE HOY", "Partidos reales de Polymarket que resuelven en las próximas 30 horas. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
 };
@@ -520,9 +577,113 @@ async function refresh() {
   }
 }
 
+/* ---------------- deportes ---------------- */
+let currentView = "crypto";
+
+function whenLabel(m) {
+  if (m.status === "live") return {text: "EN JUEGO", live: true};
+  const t = m.minutes_to_start;
+  if (t == null) return {text: "", live: false};
+  if (t < 60) return {text: "en " + Math.max(0, Math.round(t)) + " min", live: false};
+  const h = Math.floor(t / 60), mm = Math.round(t % 60);
+  return {text: "en " + h + "h" + (mm ? " " + mm + "m" : ""), live: false};
+}
+
+// Rounding each share on its own lets 0.385/0.615 print as 39%/62%.
+// Largest-remainder keeps the displayed numbers summing to exactly 100.
+function wholePercents(shares) {
+  const scaled = shares.map(s => (s || 0) * 100);
+  const floors = scaled.map(Math.floor);
+  let left = 100 - floors.reduce((a, b) => a + b, 0);
+  const order = scaled
+    .map((v, i) => ({i, frac: v - Math.floor(v)}))
+    .sort((a, b) => b.frac - a.frac);
+  const out = floors.slice();
+  for (let k = 0; k < order.length && left > 0; k++, left--) out[order[k].i]++;
+  return out;
+}
+
+function renderSports(data) {
+  const list = data.matches || [];
+  $("sports-count").textContent = list.length + " PARTIDOS";
+
+  // A cached payload is fine, but the age has to be visible.
+  const ageEl = $("sports-age");
+  if (data.age_s != null && data.age_s > 120) {
+    ageEl.style.display = "";
+    ageEl.textContent = "DATOS DE HACE " + Math.round(data.age_s / 60) + "MIN";
+  } else {
+    ageEl.style.display = "none";
+  }
+
+  if (!list.length) {
+    $("sports-grid").innerHTML =
+      '<div class="dim" style="padding:6px">no hay partidos con liquidez en las próximas 30h</div>';
+    return;
+  }
+
+  $("sports-grid").innerHTML = list.map(m => {
+    const w = whenLabel(m);
+    const pcts = wholePercents((m.outcomes || []).map(o => o.prob));
+    const rows = (m.outcomes || []).map((o, i) => {
+      const pct = pcts[i];
+      return `<div class="oc">
+        <span class="oc-name">${o.kind === "draw" ? "Empate" : o.label}</span>
+        <span class="oc-bar"><span class="oc-fill" style="width:${pct}%"></span></span>
+        <span class="oc-pct">${pct}%</span>
+        <span class="oc-ask">${o.ask == null ? "—" : Math.round(o.ask * 100) + "¢"}</span>
+      </div>`;
+    }).join("");
+
+    // Only 1X2 fixtures can be arbitraged; moneylines are complements.
+    let vig = '<span class="dim">—</span>';
+    if (m.arb_profit) {
+      vig = `<span class="vig-arb">ARB +${(m.arb_profit * 100).toFixed(2)}¢</span>`;
+    } else if (m.overround) {
+      vig = `<span class="vig-ok">suma ${(m.overround * 100).toFixed(1)}¢</span>`;
+    }
+
+    return `<div class="match">
+      <div class="match-top">
+        <span class="match-league">${(m.league || m.sport || "").toUpperCase()}</span>
+        <span class="match-when${w.live ? " live" : ""}">${w.text}</span>
+      </div>
+      <div class="match-title">${m.title}</div>
+      ${rows}
+      <div class="match-foot">
+        <span>liq $${(m.liquidity / 1000).toFixed(0)}K · vol24h $${(m.volume_24h / 1000).toFixed(0)}K</span>
+        ${vig}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function refreshSports() {
+  if (currentView !== "sports") return;
+  try {
+    const r = await fetch("/api/sports");
+    renderSports(await r.json());
+  } catch (e) {
+    $("sports-grid").innerHTML =
+      '<div class="dim" style="padding:6px">no se pudo cargar</div>';
+  }
+}
+
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    currentView = btn.dataset.view;
+    document.querySelectorAll(".tab").forEach(b =>
+      b.classList.toggle("active", b === btn));
+    $("view-crypto").style.display = currentView === "crypto" ? "" : "none";
+    $("view-sports").style.display = currentView === "sports" ? "" : "none";
+    if (currentView === "sports") refreshSports();
+  });
+});
+
 setInterval(() => { $("h-clock").textContent = new Date().toLocaleTimeString("es-ES"); }, 1000);
 refresh();
 setInterval(refresh, 3000);
+setInterval(refreshSports, 30000);
 </script>
 </body>
 </html>

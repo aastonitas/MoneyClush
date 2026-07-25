@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from moneyclush.data.clob_websocket import ClobWebSocket
 from moneyclush.data.consensus_price import ConsensusFeed
 from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
+from moneyclush.data.sports import fetch_todays_matches, to_rows
 from moneyclush.data.opening_prices import OpeningPriceCache
 from moneyclush.data.models import (
     MarketInfo,
@@ -93,6 +94,10 @@ MAX_DISPERSION_BPS = 20.0
 
 # Fees plus expected slippage on both legs of a paired trade.
 ARB_COST = 0.018
+
+# Fixtures move on the scale of hours; refetching every poll would be waste.
+SPORTS_TTL = 90.0
+SPORTS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 alerted_edges: set[str] = set()            # dedupe: slug+side alerted once per window
 
 
@@ -615,6 +620,41 @@ async def shutdown() -> None:
 @app.get("/api/state")
 async def get_state() -> JSONResponse:
     return JSONResponse(STATE)
+
+
+@app.get("/api/sports")
+async def get_sports() -> JSONResponse:
+    """Today's fixtures with their market-implied probabilities.
+
+    Fixtures change on the scale of hours, not seconds, so this is fetched
+    on request and cached rather than driven from the polling loop.
+    """
+    now = time.time()
+    if SPORTS_CACHE["rows"] and now - SPORTS_CACHE["fetched_at"] < SPORTS_TTL:
+        return JSONResponse(
+            {"matches": SPORTS_CACHE["rows"], "cached": True,
+             "age_s": round(now - SPORTS_CACHE["fetched_at"])}
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            matches = await fetch_todays_matches(client)
+        rows = to_rows(matches)
+        SPORTS_CACHE.update(rows=rows, fetched_at=now, error=None)
+        return JSONResponse({"matches": rows, "cached": False, "age_s": 0})
+    except Exception as exc:
+        log.warning("sports.fetch_failed", error=str(exc)[:120])
+        SPORTS_CACHE["error"] = str(exc)[:120]
+        # Stale rows beat an empty screen, as long as the age is shown.
+        return JSONResponse(
+            {
+                "matches": SPORTS_CACHE["rows"],
+                "cached": True,
+                "age_s": round(now - SPORTS_CACHE["fetched_at"])
+                if SPORTS_CACHE["fetched_at"] else None,
+                "error": SPORTS_CACHE["error"],
+            }
+        )
 
 
 @app.get("/")
