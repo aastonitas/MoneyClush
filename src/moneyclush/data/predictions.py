@@ -26,6 +26,8 @@ from pathlib import Path
 import httpx
 import structlog
 
+from moneyclush.data import store
+
 log = structlog.get_logger()
 
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -134,29 +136,49 @@ class PredictionLedger:
     path: Path
     predictions: dict[str, Prediction] = field(default_factory=dict)
 
+    @staticmethod
+    def _from_dict(data: dict) -> Prediction | None:
+        """Tolerate rows written before a field existed rather than
+        discarding history on every schema change."""
+        data = dict(data)
+        data.pop("pnl", None)
+        data.pop("payout", None)
+        known = Prediction.__dataclass_fields__.keys()
+        try:
+            return Prediction(**{k: v for k, v in data.items() if k in known})
+        except TypeError:
+            return None
+
     def load(self) -> None:
-        if not self.path.exists():
-            return
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except ValueError:
-                continue
-            # Tolerate rows written before a field existed rather than
-            # discarding history on every schema change.
-            data.pop("pnl", None)
-            known = Prediction.__dataclass_fields__.keys()
-            filtered = {k: v for k, v in data.items() if k in known}
-            try:
-                prediction = Prediction(**filtered)
-            except TypeError:
-                continue
-            # Later lines for the same key supersede earlier ones, which is
-            # how a pick recorded as pending becomes a resolved one.
-            self.predictions[self._key(prediction)] = prediction
+        """Read the database, then fold in any legacy JSONL rows once."""
+        for data in store.load_predictions():
+            prediction = self._from_dict(data)
+            if prediction:
+                self.predictions[self._key(prediction)] = prediction
+
+        migrated = 0
+        if self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                prediction = self._from_dict(data)
+                if not prediction:
+                    continue
+                key = self._key(prediction)
+                # Later lines supersede earlier ones, which is how a pick
+                # recorded as pending becomes a resolved one.
+                existing = self.predictions.get(key)
+                if existing is None or (prediction.resolved and not existing.resolved):
+                    self.predictions[key] = prediction
+                    store.save_prediction(key, asdict(prediction))
+                    migrated += 1
+        if migrated:
+            log.info("predictions.migrated_from_jsonl", rows=migrated)
 
     @staticmethod
     def _key(prediction: Prediction) -> str:
@@ -164,9 +186,15 @@ class PredictionLedger:
         return f"{prediction.source}:{prediction.event_id}"
 
     def _append(self, prediction: Prediction) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(prediction), ensure_ascii=False) + "\n")
+        """Write through to the database; the JSONL stays as a plain-text
+        audit trail that survives independently of the schema."""
+        store.save_prediction(self._key(prediction), asdict(prediction))
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(asdict(prediction), ensure_ascii=False) + "\n")
+        except OSError as exc:
+            log.warning("predictions.jsonl_write_failed", error=str(exc)[:80])
 
     def record(self, matches: list, min_prob: float = 0.0) -> int:
         """Back the favourite on any fixture not already in the ledger.
@@ -245,9 +273,26 @@ class PredictionLedger:
     def pending(self) -> list[Prediction]:
         return [p for p in self.predictions.values() if not p.resolved]
 
-    async def resolve(self, client: httpx.AsyncClient, batch: int = 20) -> int:
+    def _resolve_order(self) -> list[Prediction]:
+        """Pending picks, most likely to be settled first.
+
+        Insertion order starves the tail: automatic picks are recorded in
+        bulk, so a manual pick lands behind a hundred of them and is never
+        reached while long-running fixtures sit at the front. Ordering by
+        the user's own picks first, then by kick-off age, keeps the queue
+        moving and the picks that matter most checked every cycle.
+        """
+        def sort_key(p: Prediction):
+            return (
+                0 if p.source == "manual" else 1,
+                p.start_time or p.recorded_at,
+            )
+
+        return sorted(self.pending(), key=sort_key)
+
+    async def resolve(self, client: httpx.AsyncClient, batch: int = 40) -> int:
         """Settle any pending picks whose events have since closed."""
-        outstanding = self.pending()
+        outstanding = self._resolve_order()
         if not outstanding:
             return 0
 

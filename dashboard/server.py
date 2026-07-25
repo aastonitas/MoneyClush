@@ -34,6 +34,7 @@ from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
 from moneyclush.data.news import fetch_headlines
 from moneyclush.data.news import to_rows as news_to_rows
 from moneyclush.data.predictions import PredictionLedger
+from moneyclush.data import store
 from moneyclush.data.standings import fetch_standings
 from moneyclush.data.standings import to_rows as standings_to_rows
 from moneyclush.data.sports import fetch_todays_matches, to_rows
@@ -620,16 +621,18 @@ async def poll_loop() -> None:
                     # $1 stake buys 1/price shares, each settling at $1.
                     pnl = (1.0 / bet["price"] - 1.0) if won else -1.0
 
-                    STATE["fav_pnl"] += pnl
-                    fs = STATE["fav_stats"]
-                    fs["resolved"] += 1
-                    fs["wins"] += 1 if won else 0
-                    fs["staked"] += 1.0
-                    fs["expected"] += bet["price"]
-                    STATE["fav_curve"].append(
-                        [int(now_s * 1000), round(STATE["fav_pnl"], 2)]
+                    store.save_fav_bet(
+                        settled_at=int(now_s * 1000),
+                        market=bet["market"],
+                        side=bet["side"].value,
+                        price=bet["price"],
+                        won=won,
+                        pnl=pnl,
                     )
-                    STATE["fav_curve"] = STATE["fav_curve"][-600:]
+                    # Rebuild from the database so the curve reflects every
+                    # bet ever settled, not just this process's lifetime.
+                    STATE["fav_curve"], STATE["fav_stats"] = store.load_fav_history()
+                    STATE["fav_pnl"] = round(store.fav_pnl(), 4)
 
                     STATE["paper_trades"].insert(0, {
                         "ts": int(now_s * 1000),
@@ -725,11 +728,7 @@ async def poll_loop() -> None:
                     "fills": STATE["stats"]["fills"],
                     "fav_open": len(fav_positions),
                 }
-                fs = STATE["fav_stats"]
-                if fs["resolved"]:
-                    fs["hit_rate"] = round(fs["wins"] / fs["resolved"], 4)
-                    fs["expected_hit_rate"] = round(fs["expected"] / fs["resolved"], 4)
-                    fs["roi"] = round(STATE["fav_pnl"] / fs["staked"], 4)
+                STATE["storage_durable"] = store.storage_is_durable()
 
                 scanner_rows.sort(key=lambda r: r["edge"], reverse=True)
                 STATE["markets"] = market_rows
@@ -793,6 +792,17 @@ async def prediction_loop() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    # Restore the favourite track so a redeploy does not reset the curve.
+    STATE["fav_curve"], STATE["fav_stats"] = store.load_fav_history()
+    STATE["fav_pnl"] = round(store.fav_pnl(), 4)
+    STATE["storage_durable"] = store.storage_is_durable()
+    if not store.storage_is_durable():
+        log.warning("store.ephemeral", path=str(store.db_path()))
+        add_alert(
+            "warn",
+            "Almacenamiento efímero: define MONEYCLUSH_DB en un volumen o "
+            "los datos se borrarán en el próximo despliegue.",
+        )
     clob_ws.start()
     asyncio.create_task(poll_loop())
     asyncio.create_task(prediction_loop())

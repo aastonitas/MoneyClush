@@ -147,6 +147,12 @@
   .match-when { font-size: 9px; color: var(--amber); white-space: nowrap; }
   .match-when.live { color: var(--red); font-weight: 700; }
   .match-when.done { color: var(--text-dim); }
+  .tag {
+    font-size: 8px; letter-spacing: .06em; padding: 1px 5px;
+    border: 1px solid currentColor; margin-left: 5px; white-space: nowrap;
+  }
+  .tag-fav { color: var(--amber); }
+  .tag-lock { color: var(--red); }
   .match.done { opacity: .5; }
   .match.done:hover { opacity: 1; }
   .match-title { font-size: 11px; color: var(--text); margin-bottom: 8px; }
@@ -337,6 +343,7 @@
   <div class="hstat">SOL <b id="h-sol">—</b></div>
   <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
   <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
+  <div class="hstat" id="h-store" style="display:none">DB <b class="down">EFÍMERA</b></div>
   <div class="tabs">
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
@@ -806,6 +813,13 @@ async function refresh() {
 
     // A flat line is indistinguishable from a broken feed unless the gate
     // that is holding trades back is stated outright.
+    // Accumulating weeks of data onto a disk that a redeploy wipes is the
+    // one failure that cannot be recovered from, so it is surfaced up top.
+    const storeEl = $("h-store");
+    storeEl.style.display = s.storage_durable === false ? "" : "none";
+    storeEl.title = "Los datos se borrarán en el próximo despliegue. "
+      + "Define MONEYCLUSH_DB apuntando a un volumen persistente.";
+
     const gate = s.strategy_gate || {};
     const fav = s.fav_stats || {};
     // Plot whichever track has actually traded. The arbitrage curve is flat
@@ -1011,9 +1025,20 @@ function drawMatches(list, emptyMsg) {
       vig = `<span class="vig-ok">suma ${(m.overround * 100).toFixed(1)}¢</span>`;
     }
 
+    // Flag how lopsided the book is: a strong favourite is exactly where
+    // the backtest found favourites to be overpriced, so it is a warning
+    // as much as a highlight.
+    const top = Math.max(...(m.outcomes || []).map(o => o.prob || 0));
+    let tag = "";
+    if (!m.decided && top >= 0.80) {
+      tag = top >= 0.92
+        ? `<span class="tag tag-lock">CANTADO ${Math.round(top * 100)}%</span>`
+        : `<span class="tag tag-fav">FAVORITO ${Math.round(top * 100)}%</span>`;
+    }
+
     return `<div class="match${mine ? " picked" : ""}${w.done ? " done" : ""}">
       <div class="match-top">
-        <span class="match-league">${(m.league || m.sport || "").toUpperCase()}</span>
+        <span class="match-league">${(m.league || m.sport || "").toUpperCase()}${tag}</span>
         <span class="match-when${w.live ? " live" : ""}${w.done ? " done" : ""}">${w.text}</span>
       </div>
       <a class="match-title" href="${m.url}" target="_blank" rel="noopener noreferrer"

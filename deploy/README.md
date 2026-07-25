@@ -77,3 +77,16 @@ con 300 ventanas el sesgo del favorito sale a p=0.08, sin significancia.
 en el `.env` del servidor hasta que el paper trading acumule varios cientos de
 resoluciones y confirmes que el modelo gana de verdad. El backtest actual dice
 que **no** las tiene todavía.
+
+## Persistencia (obligatorio en Railway)
+
+El sistema acumula predicciones y resultados durante semanas para poder
+concluir sobre el sesgo del favorito. El disco de un contenedor se borra en
+cada despliegue, así que sin un volumen se pierde todo.
+
+1. Railway → tu servicio → **Variables** → `MONEYCLUSH_DB` = `/data/moneyclush.db`
+2. Railway → **Volumes** → *New Volume*, punto de montaje `/data`
+
+Sin `MONEYCLUSH_DB` la cabecera muestra `DB EFÍMERA` en rojo y se emite una
+alerta al arrancar. El fichero `data/predictions.jsonl` se mantiene como
+registro en texto plano y se migra automáticamente a SQLite al iniciar.
