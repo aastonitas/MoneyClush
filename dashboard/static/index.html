@@ -146,6 +146,9 @@
   .match-league { font-size: 9px; color: var(--dim); letter-spacing: .07em; }
   .match-when { font-size: 9px; color: var(--amber); white-space: nowrap; }
   .match-when.live { color: var(--red); font-weight: 700; }
+  .match-when.done { color: var(--text-dim); }
+  .match.done { opacity: .5; }
+  .match.done:hover { opacity: 1; }
   .match-title { font-size: 11px; color: var(--text); margin-bottom: 8px; }
   .oc { display: flex; align-items: center; gap: 7px; margin: 3px 0; font-size: 10px; }
   .oc-name { flex: 1; color: var(--dim); overflow: hidden; text-overflow: ellipsis;
@@ -193,6 +196,17 @@
   .bet.mine { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
   .match.picked { border-color: var(--cyan); }
   .pick-note { font-size: 8.5px; color: var(--cyan); margin-top: 5px; }
+
+  /* side-by-side comparison: you vs the automatic picks */
+  .cmp-head, .cmp-row {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 2.5px 0; font-size: 10px;
+  }
+  .cmp-head { border-bottom: 1px solid var(--line); margin-bottom: 3px;
+              font-size: 9px; letter-spacing: .06em; }
+  .cmp-row { border-bottom: 1px solid rgba(255,255,255,.03); }
+  .cmp-label { flex: 1; color: var(--dim); }
+  .cmp-v { width: 62px; text-align: right; font-weight: 600; }
 
   /* news */
   /* Only cap the list when it is not the panel absorbing the column's
@@ -489,17 +503,10 @@
 
   <div class="col">
     <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">TU SIMULADOR · $1 POR PICK</span>
+      <div class="panel-head"><span class="slash">//</span><span class="t">SIMULADOR · $1 POR PICK</span>
         <i class="info" data-key="manual">i</i>
-        <span class="badge" id="manual-badge">—</span></div>
-      <div class="panel-body" id="manual-stats"><div class="dim">cargando…</div></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><span class="slash">//</span><span class="t">SIMULACIÓN IA · $1 AL FAVORITO</span>
-        <i class="info" data-key="predictions">i</i>
-        <span class="badge" id="pred-badge">—</span></div>
-      <div class="panel-body" id="pred-stats"><div class="dim">cargando…</div></div>
+        <span class="badge" id="sim-badge">—</span></div>
+      <div class="panel-body" id="sim-compare"><div class="dim">cargando…</div></div>
     </div>
 
     <div class="panel grow">
@@ -800,17 +807,33 @@ async function refresh() {
     // A flat line is indistinguishable from a broken feed unless the gate
     // that is holding trades back is stated outright.
     const gate = s.strategy_gate || {};
-    if (!gate.fills) {
-      const best = gate.best_pair_seen;
-      $("pnl-why").innerHTML = best == null
-        ? "sin operaciones aún — esperando primer libro completo"
-        : `0 operaciones: la estrategia exige que el par Up+Down cueste ≤ ${
-            Math.round((gate.max_pair_cost || 0) * 100)}¢ y el mejor visto en esta sesión es ${
-            (best * 100).toFixed(1)}¢. La curva está plana porque no hay nada que operar, no por falta de datos.`;
+    const fav = s.fav_stats || {};
+    // Plot whichever track has actually traded. The arbitrage curve is flat
+    // by design (it refuses a pair costing over $1), so a flat line there is
+    // not a signal — the favourite track is what shows live movement.
+    const useFav = (fav.resolved || 0) > 0;
+    const best = gate.best_pair_seen;
+    const arbTxt = gate.fills
+      ? `arbitraje: ${gate.fills} fills`
+      : `arbitraje: 0 operaciones — exige par ≤ ${Math.round((gate.max_pair_cost || 0) * 100)}¢ y el mejor visto es ${
+          best == null ? "—" : (best * 100).toFixed(1) + "¢"}`;
+
+    if (useFav) {
+      const hr = fav.hit_rate == null ? "—" : (fav.hit_rate * 100).toFixed(0) + "%";
+      const eh = fav.expected_hit_rate == null ? "—" : (fav.expected_hit_rate * 100).toFixed(0) + "%";
+      const pnl = s.fav_pnl || 0;
+      $("pnl-val").textContent = (pnl >= 0 ? "+" : "−") + "$" + Math.abs(pnl).toFixed(2);
+      $("pnl-val").className = "pnl-big " + (pnl >= 0 ? "up" : "down");
+      $("pnl-badge").textContent = "FAVORITO";
+      $("pnl-why").innerHTML =
+        `curva = <b>backing al favorito</b>, $1 por ventana BTC · ${fav.resolved} resueltas, ` +
+        `acierto ${hr} vs ${eh} esperado · ${gate.fav_open || 0} en juego<br>${arbTxt}`;
     } else {
-      $("pnl-why").textContent = "";
+      $("pnl-why").innerHTML = (gate.fav_open || 0)
+        ? `${gate.fav_open} apuesta(s) al favorito en juego — la curva se moverá al cerrar la ventana<br>${arbTxt}`
+        : `esperando la primera ventana BTC<br>${arbTxt}`;
     }
-    drawCurve($("pnl-canvas"), s.pnl_curve || []);
+    drawCurve($("pnl-canvas"), useFav ? (s.fav_curve || []) : (s.pnl_curve || []));
 
     // positions
     const pos = Object.entries(s.positions || {});
@@ -848,6 +871,9 @@ async function refresh() {
 let currentView = "crypto";
 
 function whenLabel(m) {
+  // Polymarket leaves esports windows open for six hours, so the clock says
+  // "live" long after the match ended. A side at 97c+ is the real signal.
+  if (m.decided) return {text: "DECIDIDO", live: false, done: true};
   if (m.status === "live") return {text: "EN JUEGO", live: true};
   const t = m.minutes_to_start;
   if (t == null) return {text: "", live: false};
@@ -985,10 +1011,10 @@ function drawMatches(list, emptyMsg) {
       vig = `<span class="vig-ok">suma ${(m.overround * 100).toFixed(1)}¢</span>`;
     }
 
-    return `<div class="match${mine ? " picked" : ""}">
+    return `<div class="match${mine ? " picked" : ""}${w.done ? " done" : ""}">
       <div class="match-top">
         <span class="match-league">${(m.league || m.sport || "").toUpperCase()}</span>
-        <span class="match-when${w.live ? " live" : ""}">${w.text}</span>
+        <span class="match-when${w.live ? " live" : ""}${w.done ? " done" : ""}">${w.text}</span>
       </div>
       <a class="match-title" href="${m.url}" target="_blank" rel="noopener noreferrer"
          title="Abrir en Polymarket">${m.title}<span class="ext">↗</span></a>
@@ -1119,6 +1145,52 @@ async function refreshNews(category, elId) {
 let predLogSource = "manual";
 let predData = { ia: {}, manual: {} };
 
+// Two columns of the same metrics: yours against the automatic picks.
+function compareBlock(manS, iaS) {
+  const row = (label, fm, fi, cls) =>
+    `<div class="cmp-row"><span class="cmp-label">${label}</span>` +
+    `<span class="cmp-v ${cls || ""}">${fm}</span>` +
+    `<span class="cmp-v ${cls || ""}">${fi}</span></div>`;
+
+  const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+  const money = v => `${(v || 0) >= 0 ? "+" : "−"}$${Math.abs(v || 0).toFixed(2)}`;
+  const cls = v => (v || 0) > 0 ? "up" : (v || 0) < 0 ? "down" : "dim";
+
+  // The gap between realised and expected is the experiment: picks that win
+  // less often than their price implied were overpriced.
+  const gap = s => (s.hit_rate == null || s.expected_hit_rate == null)
+    ? null : (s.hit_rate - s.expected_hit_rate) * 100;
+  const gm = gap(manS), gi = gap(iaS);
+  const gapTxt = g => g == null ? "—" : (g >= 0 ? "+" : "") + g.toFixed(1) + " pts";
+  const gapCls = g => g == null ? "dim" : g < -2 ? "amber" : g > 2 ? "up" : "dim";
+
+  let note = '<span class="dim">la columna clave es DIFERENCIA: acertar mucho no basta si pagabas caro por ello.</span>';
+  if ((manS.resolved || 0) === 0 && (manS.pending || 0) === 0) {
+    note = '<span class="dim">pulsa $1→$X en cualquier resultado para hacer tu pick.</span>';
+  }
+
+  return `
+    <div class="cmp-head"><span class="cmp-label"></span>
+      <span class="cmp-v cyan">TÚ</span><span class="cmp-v amber">IA</span></div>
+    ${row("resueltas", manS.resolved || 0, iaS.resolved || 0)}
+    ${row("en juego", `${manS.pending || 0}`, `${iaS.pending || 0}`)}
+    ${row("aciertos", manS.wins || 0, iaS.wins || 0, "up")}
+    ${row("fallos", manS.losses || 0, iaS.losses || 0, "down")}
+    ${row("acierto", pct(manS.hit_rate), pct(iaS.hit_rate))}
+    ${row("esperado", pct(manS.expected_hit_rate), pct(iaS.expected_hit_rate), "cyan")}
+    <div class="cmp-row"><span class="cmp-label">diferencia</span>
+      <span class="cmp-v ${gapCls(gm)}">${gapTxt(gm)}</span>
+      <span class="cmp-v ${gapCls(gi)}">${gapTxt(gi)}</span></div>
+    ${row("invertido", `$${(manS.staked || 0).toFixed(0)}`, `$${(iaS.staked || 0).toFixed(0)}`)}
+    <div class="cmp-row"><span class="cmp-label">PnL</span>
+      <span class="cmp-v ${cls(manS.pnl)}">${money(manS.pnl)}</span>
+      <span class="cmp-v ${cls(iaS.pnl)}">${money(iaS.pnl)}</span></div>
+    <div class="cmp-row"><span class="cmp-label">ROI</span>
+      <span class="cmp-v ${cls(manS.pnl)}">${pct(manS.roi)}</span>
+      <span class="cmp-v ${cls(iaS.pnl)}">${pct(iaS.roi)}</span></div>
+    <div style="margin-top:8px; line-height:1.45; font-size:9.5px">${note}</div>`;
+}
+
 function statsBlock(s, isIa) {
   const hit = s.hit_rate == null ? null : s.hit_rate * 100;
   const exp = s.expected_hit_rate == null ? null : s.expected_hit_rate * 100;
@@ -1182,18 +1254,16 @@ function renderPredictions(data) {
 
   const iaS = ia.stats || {}, manS = man.stats || {};
 
-  if ($("pred-badge")) {
-    $("pred-badge").textContent = iaS.resolved
-      ? iaS.resolved + " RESUELTAS" : (iaS.pending || 0) + " EN JUEGO";
-    $("pred-stats").innerHTML = statsBlock(iaS, true);
+  // Sports: one merged panel comparing both. Trending: your picks only.
+  if ($("sim-compare")) {
+    $("sim-badge").textContent = `TÚ ${manS.total || 0} · IA ${iaS.total || 0}`;
+    $("sim-compare").innerHTML = compareBlock(manS, iaS);
   }
-  ["manual-badge", "manual-badge-t"].forEach(id => {
-    if ($(id)) $(id).textContent = manS.total
+  if ($("manual-badge-t")) {
+    $("manual-badge-t").textContent = manS.total
       ? `${manS.resolved || 0}/${manS.total}` : "SIN PICKS";
-  });
-  ["manual-stats", "manual-stats-t"].forEach(id => {
-    if ($(id)) $(id).innerHTML = statsBlock(manS, false);
-  });
+  }
+  if ($("manual-stats-t")) $("manual-stats-t").innerHTML = statsBlock(manS, false);
 
   // Sports view: one table with a source toggle. Trending: only your picks.
   if ($("pred-log")) {

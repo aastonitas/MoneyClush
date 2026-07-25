@@ -76,6 +76,14 @@ STATE: dict = {
     "paper_pnl": 0.0,
     "best_pair_seen": None,
     "strategy_gate": {},
+    # Second paper track. The arbitrage strategy correctly refuses to trade
+    # a pair that costs more than $1, so its curve is flat by design. This
+    # one backs the market's favourite on every BTC window instead: it
+    # settles every 5-15 minutes, so it actually moves, and it tests the
+    # favourite-bias hypothesis at far higher frequency than sports can.
+    "fav_curve": [],
+    "fav_pnl": 0.0,
+    "fav_stats": {"resolved": 0, "wins": 0, "staked": 0.0, "expected": 0.0},
     "paper_trades": [],
     "positions": {},
     "alerts": [],
@@ -96,6 +104,12 @@ strategy = TemporalArbitrageStrategy(block_size=25)
 paper_positions: dict[str, Position] = {}
 # condition_id -> {slug, asset, duration, opening, window_end}
 paper_meta: dict[str, dict] = {}
+
+# Favourite-backing track: one $1 bet per BTC window, settled at window close.
+fav_positions: dict[str, dict] = {}
+fav_settled: set[str] = set()
+FAV_MIN_PRICE = 0.15
+FAV_MAX_PRICE = 0.92
 opening_cache = OpeningPriceCache()        # real opening prices from OKX candles
 consensus_feed = ConsensusFeed()           # cross-exchange dispersion monitor
 clob_ws = ClobWebSocket()                  # live order books, ~300 updates/s
@@ -109,7 +123,7 @@ MAX_DISPERSION_BPS = 20.0
 ARB_COST = 0.018
 
 # Fixtures move on the scale of hours; refetching every poll would be waste.
-SPORTS_TTL = 90.0
+SPORTS_TTL = 40.0
 SPORTS_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
 
 # Headlines and trending markets both move slower than the 3s poll loop.
@@ -438,6 +452,38 @@ async def poll_loop() -> None:
                                 if best is None or pair < best:
                                     STATE["best_pair_seen"] = pair
 
+                            # -------- favourite-backing track ($1 per window)
+                            # Entered once per window, roughly halfway through,
+                            # so there is a real favourite to back rather than
+                            # a coin flip at the open.
+                            cid = mk.condition_id
+                            seconds_left = mk.seconds_remaining
+                            window_len = max(
+                                mk.window_end_epoch - mk.window_start_epoch, 1
+                            )
+                            if (
+                                cid not in fav_positions
+                                and cid not in fav_settled
+                                and seconds_left < window_len * 0.6
+                                and seconds_left > 20
+                                and book_up.best_ask is not None
+                                and book_down.best_ask is not None
+                            ):
+                                up_ask, down_ask = book_up.best_ask, book_down.best_ask
+                                side = (
+                                    OutcomeSide.UP if up_ask < down_ask else OutcomeSide.DOWN
+                                )
+                                price = min(up_ask, down_ask)
+                                if FAV_MIN_PRICE <= price <= FAV_MAX_PRICE:
+                                    fav_positions[cid] = {
+                                        "side": side,
+                                        "price": price,
+                                        "market": f"{mk.asset} {mk.duration}",
+                                        "opening": opening,
+                                        "window_end": mk.window_end_epoch,
+                                        "asset": mk.asset,
+                                    }
+
                             row.update({
                                 "best_bid_up": book_up.best_bid,
                                 "best_ask_up": book_up.best_ask,
@@ -550,8 +596,53 @@ async def poll_loop() -> None:
 
                     market_rows.append(row)
 
-                # -------- resolve expired paper positions (per position, precise)
+                # -------- settle the favourite-backing track
                 now_s = time.time()
+                for cid in list(fav_positions.keys()):
+                    bet = fav_positions[cid]
+                    if now_s <= bet["window_end"] + 5:
+                        continue
+                    final_spot = await opening_cache.get(
+                        client, bet["asset"], bet["window_end"]
+                    )
+                    if final_spot is None:
+                        continue  # retry next poll rather than guess
+
+                    fav_positions.pop(cid)
+                    fav_settled.add(cid)
+
+                    winner = (
+                        OutcomeSide.UP
+                        if final_spot >= bet["opening"]
+                        else OutcomeSide.DOWN
+                    )
+                    won = winner == bet["side"]
+                    # $1 stake buys 1/price shares, each settling at $1.
+                    pnl = (1.0 / bet["price"] - 1.0) if won else -1.0
+
+                    STATE["fav_pnl"] += pnl
+                    fs = STATE["fav_stats"]
+                    fs["resolved"] += 1
+                    fs["wins"] += 1 if won else 0
+                    fs["staked"] += 1.0
+                    fs["expected"] += bet["price"]
+                    STATE["fav_curve"].append(
+                        [int(now_s * 1000), round(STATE["fav_pnl"], 2)]
+                    )
+                    STATE["fav_curve"] = STATE["fav_curve"][-600:]
+
+                    STATE["paper_trades"].insert(0, {
+                        "ts": int(now_s * 1000),
+                        "market": bet["market"],
+                        "side": f"FAV {bet['side'].value.upper()}",
+                        "price": round(bet["price"], 4),
+                        "size": 1.0,
+                        "reason": f"{'ACIERTO' if won else 'fallo'} "
+                                  f"{'+' if pnl >= 0 else ''}{pnl:.2f}$",
+                    })
+                    STATE["paper_trades"] = STATE["paper_trades"][:30]
+
+                # -------- resolve expired paper positions (per position, precise)
                 for cid in list(paper_positions.keys()):
                     meta = paper_meta.get(cid)
                     if meta is None:
@@ -632,7 +723,13 @@ async def poll_loop() -> None:
                         if STATE.get("best_pair_seen") is not None else None
                     ),
                     "fills": STATE["stats"]["fills"],
+                    "fav_open": len(fav_positions),
                 }
+                fs = STATE["fav_stats"]
+                if fs["resolved"]:
+                    fs["hit_rate"] = round(fs["wins"] / fs["resolved"], 4)
+                    fs["expected_hit_rate"] = round(fs["expected"] / fs["resolved"], 4)
+                    fs["roi"] = round(STATE["fav_pnl"] / fs["staked"], 4)
 
                 scanner_rows.sort(key=lambda r: r["edge"], reverse=True)
                 STATE["markets"] = market_rows

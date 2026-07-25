@@ -178,6 +178,10 @@ class PredictionLedger:
         for match in matches:
             if f"ia:{match.event_id}" in self.predictions:
                 continue
+            # Backing a result the market has already called is not a
+            # forecast, and it would inflate the hit rate for free.
+            if getattr(match, "decided", False):
+                continue
             favourite = match.favourite()
             if favourite is None:
                 continue

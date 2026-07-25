@@ -174,12 +174,27 @@ class Match:
         return [(o, p / total) for o, p in priced]
 
     @property
+    def decided(self) -> bool:
+        """Whether the market has already settled the result in practice.
+
+        The declared window is not a reliable end signal: Polymarket gives
+        esports fixtures a six-hour `endDate`, so a BO3 that finished two
+        hours ago still looks live by the clock. The price does not lie —
+        once a side trades at 97c+ the outcome is no longer in question.
+        """
+        top = max((p for _, p in self.normalised()), default=0.0)
+        return top >= 0.97
+
+    @property
     def status(self) -> str:
         now = datetime.now(timezone.utc)
         if self.start_time and now < self.start_time:
             return "upcoming"
         if self.end_time and now > self.end_time:
             return "ended"
+        # Started, clock still running, but the market has called it.
+        if self.decided:
+            return "decided"
         return "live"
 
     @property
@@ -476,9 +491,11 @@ async def fetch_todays_matches(
             seen.add(event_id)
             matches.append(match)
 
-    # Kick-off order: what is starting soonest is what matters.
+    # Anything the market has already called goes to the back regardless of
+    # kick-off time; among the rest, soonest first.
     matches.sort(
         key=lambda m: (
+            m.decided,
             m.start_time or datetime.max.replace(tzinfo=timezone.utc),
             -m.volume_24h,
         )
@@ -503,6 +520,7 @@ def to_rows(matches: list[Match]) -> list[dict]:
                 "discipline_label": DISCIPLINE_LABELS.get(m.discipline, "OTROS"),
                 "shape": m.shape,
                 "status": m.status,
+                "decided": m.decided,
                 "day_bucket": m.day_bucket,
                 "minutes_to_start": (
                     round(m.minutes_to_start) if m.minutes_to_start is not None else None
