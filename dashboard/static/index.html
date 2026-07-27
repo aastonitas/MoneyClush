@@ -37,6 +37,9 @@
     border: 1px solid var(--border);
     background: var(--panel);
     margin-bottom: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
   }
   .logo { font-size: 15px; font-weight: 700; color: var(--green); letter-spacing: 1px; }
   .logo span { color: var(--text); }
@@ -1839,7 +1842,17 @@ document.addEventListener('DOMContentLoaded', function() {
     grids.forEach(grid => {
         let saved = localStorage.getItem('grid-layout-v2-' + grid.el.id);
         if (saved) {
-            try { grid.load(JSON.parse(saved)); } catch (e) {}
+            try { 
+                grid.load(JSON.parse(saved)); 
+                
+                // Restaurar clase colapsada si el alto es 1
+                grid.engine.nodes.forEach(node => {
+                    if (node.h === 1 && node.el) {
+                        const panel = node.el.querySelector('.panel');
+                        if (panel) panel.classList.add('collapsed');
+                    }
+                });
+            } catch (e) {}
         }
         grid.on('change', function() {
             localStorage.setItem('grid-layout-v2-' + grid.el.id, JSON.stringify(grid.save()));
