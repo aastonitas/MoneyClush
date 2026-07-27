@@ -144,10 +144,11 @@ class TemporalArbitrageStrategy(Strategy):
         if edge < self.min_edge_per_pair:
             return None
 
-        size = min(
-            self.block_size,
-            self.block_size - position.directional_exposure,
-        )
+        if position.directional_exposure > 0:
+            size = min(self.block_size, position.directional_exposure)
+        else:
+            size = self.block_size
+
         if size <= 0:
             return None
 

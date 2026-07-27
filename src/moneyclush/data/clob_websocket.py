@@ -45,9 +45,9 @@ class LiveBook:
     updates: int = 0
 
     def apply_snapshot(self, bids: list[dict], asks: list[dict]) -> None:
-        self.bids = {float(l["price"]): float(l["size"]) for l in bids
+        self.bids = {round(float(l["price"]), 4): float(l["size"]) for l in bids
                      if float(l["size"]) > 0}
-        self.asks = {float(l["price"]): float(l["size"]) for l in asks
+        self.asks = {round(float(l["price"]), 4): float(l["size"]) for l in asks
                      if float(l["size"]) > 0}
         self.best_bid = max(self.bids) if self.bids else None
         self.best_ask = min(self.asks) if self.asks else None
@@ -55,7 +55,7 @@ class LiveBook:
         self.updates += 1
 
     def apply_change(self, change: dict) -> None:
-        price = float(change["price"])
+        price = round(float(change["price"]), 4)
         size = float(change["size"])
         side = change.get("side", "").upper()
 

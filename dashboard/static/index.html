@@ -348,11 +348,18 @@
   .pnl-big { font-size: 22px; font-weight: 700; }
   canvas { width: 100%; height: 110px; display: block; }
 
+  .panel.collapsed .panel-body,
+  .panel.collapsed .sports-grid,
+  .panel.collapsed .filters { display: none !important; }
+  .panel-head { cursor: pointer; user-select: none; }
+
   .footer-note {
     color: var(--text-dim); font-size: 10px; margin-top: 8px; text-align: center;
     flex: none;
   }
 </style>
+  <link href="https://cdn.jsdelivr.net/npm/gridstack@10.0.1/dist/gridstack.min.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/gridstack@10.0.1/dist/gridstack-all.js"></script>
 </head>
 <body>
 
@@ -368,12 +375,10 @@
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
     <button class="tab" data-view="trending">DESTACADOS</button>
-  </div>
   <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
     <span class="h-bot-label">BOT</span>
     <canvas id="h-bot-spark" width="70" height="16"></canvas>
     <b id="h-bot-pnl" class="dim">$0.00</b>
-  </div>
   <div class="spacer"></div>
   <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
   <div class="mode-chip">PAPER MODE</div>
@@ -384,25 +389,29 @@
   <div class="hstat" id="h-clock">--:--:--</div>
 </header>
 
-<div class="grid" id="view-crypto">
+<div class="grid-stack" id="view-crypto">
 
   <!-- ============ SIDEBAR ============ -->
-  <div class="col">
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">ADVISOR</span>
         <i class="info" data-key="advisor">i</i>
         <span class="badge">AUTO</span></div>
       <div class="panel-body" id="advisor"><div class="dim">analizando…</div></div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">ALERTAS</span>
         <i class="info" data-key="alerts">i</i>
         <span class="badge amber" id="alert-count">0</span></div>
       <div class="panel-body" id="alerts" style="max-height:260px; overflow-y:auto"></div>
+      </div>
     </div>
 
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">SESIÓN</span>
         <i class="info" data-key="session">i</i></div>
       <div class="panel-body">
@@ -414,20 +423,22 @@
         <div class="sstat"><span>dispersión fuentes</span><b id="s-disp">—</b></div>
         <div class="sstat"><span>métricas</span><b class="dim">paper_metrics.jsonl</b></div>
       </div>
+      </div>
     </div>
 
-  </div>
 
   <!-- ============ COL 1: SCANNER ============ -->
-  <div class="col">
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">MISPRICING SCANNER</span>
         <i class="info" data-key="scanner">i</i>
         <span class="badge" id="scan-count">0 FOUND</span></div>
       <div class="panel-body" id="scanner"></div>
+      </div>
     </div>
 
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PAPER POSITIONS</span>
         <i class="info" data-key="positions">i</i></div>
       <div class="panel-body">
@@ -436,12 +447,12 @@
           <tbody id="positions"><tr><td colspan="4" class="dim">sin posiciones</td></tr></tbody>
         </table>
       </div>
+      </div>
     </div>
-  </div>
 
   <!-- ============ COL 2: LIVE MARKETS + PNL ============ -->
-  <div class="col">
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">LIVE MARKETS</span>
         <i class="info" data-key="markets">i</i>
         <span class="badge" id="mkt-count">WATCHING 0</span></div>
@@ -451,9 +462,11 @@
           <tbody id="markets"></tbody>
         </table>
       </div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">PNL CURVE</span>
         <i class="info" data-key="pnl">i</i>
         <span class="badge amber" id="pnl-badge">$0.00</span></div>
@@ -463,12 +476,12 @@
         <div class="dim" id="pnl-why" style="font-size:9px; margin-top:6px; line-height:1.45"></div>
         <div id="pnl-calibration" style="margin-top:8px"></div>
       </div>
+      </div>
     </div>
-  </div>
 
   <!-- ============ COL 3: DEPTH + TRADES ============ -->
-  <div class="col col-3">
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">BTC DEPTH</span>
         <i class="info" data-key="depth">i</i></div>
       <div class="panel-body">
@@ -478,9 +491,11 @@
         </table>
         <div class="scan-detail" style="margin-top:8px" id="pair-info"></div>
       </div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">ARBITRAJE UP+DOWN</span>
         <i class="info" data-key="arb">i</i>
         <span class="badge" id="arb-count">0 VISTOS</span></div>
@@ -490,9 +505,11 @@
           <tbody id="arbs"><tr><td colspan="5" class="dim">ninguno detectado aún</td></tr></tbody>
         </table>
       </div>
+      </div>
     </div>
 
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PAPER TRADE LOG</span>
         <i class="info" data-key="trades">i</i>
         <span class="badge">TEMPORAL ARB</span></div>
@@ -502,24 +519,24 @@
           <tbody id="trades"><tr><td colspan="5" class="dim">esperando señales…</td></tr></tbody>
         </table>
       </div>
+      </div>
     </div>
-  </div>
 
   <!-- ============ COL 4: NOTICIAS (altura completa) ============ -->
-  <div class="col col-news">
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS CRYPTO</span>
         <i class="info" data-key="news-crypto">i</i></div>
       <div class="filters" id="news-crypto-filters"></div>
       <div class="panel-body news-list" id="news-crypto"><div class="dim">cargando…</div></div>
+      </div>
     </div>
-  </div>
 </div>
 
 <!-- ============ VISTA DEPORTES ============ -->
-<div class="grid-sports" id="view-sports" style="display:none">
-  <div class="col">
-    <div class="panel grow">
+<div class="grid-stack" id="view-sports" style="display:none">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">PARTIDOS</span>
         <i class="info" data-key="sports">i</i>
         <span class="badge" id="sports-count">—</span>
@@ -535,18 +552,20 @@
       <div class="sports-grid" id="sports-grid">
         <div class="dim" style="padding:6px">cargando partidos…</div>
       </div>
+      </div>
     </div>
-  </div>
 
-  <div class="col">
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">SIMULADOR · $1 POR PICK</span>
         <i class="info" data-key="manual">i</i>
         <span class="badge" id="sim-badge">—</span></div>
       <div class="panel-body" id="sim-compare"><div class="dim">cargando…</div></div>
+      </div>
     </div>
 
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">REGISTRO</span>
         <i class="info" data-key="pred-log">i</i>
         <span class="badge" id="pred-log-count">—</span></div>
@@ -560,9 +579,11 @@
           <tbody id="pred-log"><tr><td colspan="6" class="dim">sin predicciones aún</td></tr></tbody>
         </table>
       </div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">TABLAS DE LIGAS</span>
         <i class="info" data-key="standings">i</i>
         <span class="badge" id="standings-badge">—</span></div>
@@ -570,23 +591,23 @@
       <div class="panel-body" style="max-height:250px; overflow-y:auto" id="standings-body">
         <div class="dim">cargando…</div>
       </div>
+      </div>
     </div>
-  </div>
 
-  <div class="col col-news">
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS DEPORTES</span>
         <i class="info" data-key="news-sports">i</i></div>
       <div class="filters" id="news-sports-filters"></div>
       <div class="panel-body news-list" id="news-sports"><div class="dim">cargando…</div></div>
+      </div>
     </div>
-  </div>
 </div>
 
 <!-- ============ VISTA DESTACADOS ============ -->
-<div class="grid-sports" id="view-trending" style="display:none">
-  <div class="col">
-    <div class="panel grow">
+<div class="grid-stack" id="view-trending" style="display:none">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">SUCESOS DESTACADOS · POLYMARKET</span>
         <i class="info" data-key="trending">i</i>
         <span class="badge" id="trending-count">—</span>
@@ -600,18 +621,20 @@
       <div class="sports-grid" id="trending-grid">
         <div class="dim" style="padding:6px">cargando…</div>
       </div>
+      </div>
     </div>
-  </div>
 
-  <div class="col">
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">TU SIMULADOR · $1 POR PICK</span>
         <i class="info" data-key="manual">i</i>
         <span class="badge" id="manual-badge-t">—</span></div>
       <div class="panel-body" id="manual-stats-t"><div class="dim">cargando…</div></div>
+      </div>
     </div>
 
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">TUS PREDICCIONES</span>
         <i class="info" data-key="pred-log">i</i>
         <span class="badge" id="pred-log-count-t">—</span></div>
@@ -621,9 +644,11 @@
           <tbody id="pred-log-t"><tr><td colspan="6" class="dim">sin predicciones aún</td></tr></tbody>
         </table>
       </div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel">
       <div class="panel-head"><span class="slash">//</span><span class="t">X / TWITTER</span>
         <i class="info" data-key="x-pending">i</i>
         <span class="badge amber">PENDIENTE</span></div>
@@ -633,17 +658,17 @@
           Sin credenciales aún — ver el ícono ⓘ para instrucciones.
         </div>
       </div>
+      </div>
     </div>
-  </div>
 
-  <div class="col col-news">
-    <div class="panel grow">
+    <div class="grid-stack-item">
+      <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">NOTICIAS</span>
         <i class="info" data-key="news-general">i</i></div>
       <div class="filters" id="news-general-filters"></div>
       <div class="panel-body news-list" id="news-general"><div class="dim">cargando…</div></div>
+      </div>
     </div>
-  </div>
 </div>
 
 <div class="footer-note">
@@ -1800,6 +1825,48 @@ async function initPush() {
 }
 
 initPush();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let grids = GridStack.initAll({
+        cellHeight: 80,
+        margin: 8,
+        handle: '.panel-head',
+        column: 12,
+        minRow: 1
+    });
+    grids.forEach(grid => {
+        let saved = localStorage.getItem('grid-layout-' + grid.el.id);
+        if (saved) {
+            try { grid.load(JSON.parse(saved)); } catch (e) {}
+        }
+        grid.on('change', function() {
+            localStorage.setItem('grid-layout-' + grid.el.id, JSON.stringify(grid.save()));
+        });
+    });
+
+    // Colapsar paneles
+    document.addEventListener('click', function(e) {
+        const head = e.target.closest('.panel-head');
+        if (!head || e.target.closest('.info')) return;
+        
+        const panel = head.closest('.panel');
+        const item = head.closest('.grid-stack-item');
+        if (!panel || !item || !item.gridstackNode) return;
+
+        const grid = item.gridstackNode.grid;
+        if (panel.classList.contains('collapsed')) {
+            panel.classList.remove('collapsed');
+            const h = parseInt(panel.dataset.savedHeight) || 3;
+            grid.update(item, { h: h });
+        } else {
+            panel.dataset.savedHeight = item.gridstackNode.h;
+            panel.classList.add('collapsed');
+            grid.update(item, { h: 1 });
+        }
+    });
+});
 </script>
 </body>
 </html>
