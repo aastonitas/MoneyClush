@@ -1837,7 +1837,12 @@ document.addEventListener('DOMContentLoaded', function() {
         margin: 8,
         handle: '.panel-head',
         column: 12,
-        minRow: 1
+        minRow: 1,
+        // Without this, GridStack v10 keeps the 12-column desktop layout
+        // at any width, so on a phone every panel is squeezed to a ~60px
+        // sliver instead of stacking full-width — which reads as blocks
+        // repeating/duplicating rather than as a layout bug.
+        oneColumnSize: 768
     });
     grids.forEach(grid => {
         let saved = localStorage.getItem('grid-layout-v3-' + grid.el.id);

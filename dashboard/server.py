@@ -823,6 +823,13 @@ async def poll_loop() -> None:
                     stats["win_rate"] = (
                         stats["wins"] / stats["resolved"] if stats["resolved"] else 0.0
                     )
+                    store.save_paper_bet(
+                        settled_at=int(now_s * 1000),
+                        slug=meta["slug"],
+                        winner=winner.value,
+                        pnl=round(pnl, 4),
+                        invested=round(pos.total_invested, 4),
+                    )
 
                     add_alert(
                         "resolve",
@@ -988,6 +995,17 @@ async def startup() -> None:
     # Restore the favourite track so a redeploy does not reset the curve.
     STATE["fav_curve"], STATE["fav_stats"] = store.load_fav_history()
     STATE["fav_pnl"] = round(store.fav_pnl(), 4)
+
+    # Same restoration for the arbitrage paper track: every settlement was
+    # already durable in paper_metrics.jsonl, but paper_pnl/pnl_curve lived
+    # only in STATE and reset to 0 on every restart — the curve looked like
+    # a fresh account each redeploy even though the history was intact.
+    STATE["pnl_curve"], paper_stats = store.load_paper_history()
+    STATE["paper_pnl"] = round(store.paper_pnl(), 4)
+    STATE["stats"]["resolved"] = paper_stats["resolved"]
+    STATE["stats"]["wins"] = paper_stats["wins"]
+    STATE["stats"]["losses"] = paper_stats["losses"]
+    STATE["stats"]["win_rate"] = paper_stats["win_rate"]
 
     # Bets that were still open when the process last stopped. Windows
     # that closed in the meantime settle on the next poll.

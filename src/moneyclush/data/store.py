@@ -137,6 +137,21 @@ def _init(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_fav_time ON fav_bets(settled_at);
 
+        -- Settlements from the temporal-arbitrage paper track. This used
+        -- to live only in STATE["paper_pnl"], reset to 0 on every restart
+        -- with no way back to the true total — the curve looked like a
+        -- fresh account each redeploy even though the JSONL log kept the
+        -- real history.
+        CREATE TABLE IF NOT EXISTS paper_bets (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            settled_at    INTEGER NOT NULL,
+            slug          TEXT,
+            winner        TEXT,
+            pnl           REAL,
+            invested      REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_paper_time ON paper_bets(settled_at);
+
         -- Bets placed but not yet settled. Held only in memory until now,
         -- so every restart silently dropped whatever was in flight.
         CREATE TABLE IF NOT EXISTS fav_open (
@@ -394,6 +409,54 @@ def load_fav_history(limit: int = 600) -> tuple[list[list], dict]:
 
 def fav_pnl() -> float:
     row = connect().execute("SELECT COALESCE(SUM(pnl), 0) AS s FROM fav_bets").fetchone()
+    return float(row["s"])
+
+
+def save_paper_bet(
+    settled_at: int,
+    slug: str,
+    winner: str,
+    pnl: float,
+    invested: float,
+) -> None:
+    conn = connect()
+    with _lock:
+        conn.execute(
+            """INSERT INTO paper_bets (settled_at, slug, winner, pnl, invested)
+               VALUES (?, ?, ?, ?, ?)""",
+            (settled_at, slug, winner, pnl, invested),
+        )
+        conn.commit()
+
+
+def load_paper_history(limit: int = 600) -> tuple[list[list], dict]:
+    """Cumulative PnL curve and win/loss counts, oldest first."""
+    conn = connect()
+    rows = conn.execute(
+        "SELECT settled_at, pnl FROM paper_bets ORDER BY settled_at"
+    ).fetchall()
+
+    curve: list[list] = []
+    total = 0.0
+    wins = 0
+    for row in rows:
+        total += row["pnl"]
+        curve.append([row["settled_at"], round(total, 2)])
+        if row["pnl"] >= 0:
+            wins += 1
+
+    resolved = len(rows)
+    stats = {
+        "resolved": resolved,
+        "wins": wins,
+        "losses": resolved - wins,
+        "win_rate": wins / resolved if resolved else 0.0,
+    }
+    return curve[-limit:], stats
+
+
+def paper_pnl() -> float:
+    row = connect().execute("SELECT COALESCE(SUM(pnl), 0) AS s FROM paper_bets").fetchone()
     return float(row["s"])
 
 
