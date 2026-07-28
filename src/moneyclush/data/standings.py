@@ -5,14 +5,24 @@ is a leaderboard rather than a full standings page. That limit is surfaced
 to the caller rather than hidden, because a table that silently stops at
 fifth place looks like a bug.
 
-MLS is a special case: it runs two conferences and the endpoint returns
-them interleaved, which is why its ranks repeat (1, 1, 2, 2...). The
-conference name is kept alongside each row so the display can say so.
+Several of these leagues do not run one table. MLS splits into two
+conferences, Argentina's Apertura into two zones, and the endpoint returns
+them *interleaved* — which is why ranks repeat (1, 1, 2, 2...). The phase
+or zone lives in `strGroup`, so rows are tagged with it and the caller can
+present one table per group instead of a single nonsensical merged list.
+
+That same five-row cap is what decides which phases are visible at all.
+The budget is spent on whichever rows the API returns first: Argentina
+2026 comes back as Apertura Zona A + Zona B, while Peru 2026 spends all
+five on its Tabla Anual, so its Apertura and Clausura tables are simply
+not reachable on this tier. Rather than fake them, only the groups the API
+actually returns are exposed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 
 import httpx
@@ -38,10 +48,26 @@ class LeagueSpec:
 
 LEAGUES: tuple[LeagueSpec, ...] = (
     LeagueSpec("peru", "Liga 1", "Perú", "4688", "2026"),
+    LeagueSpec("argentina", "Liga Argentina", "Argentina", "4406", "2026"),
     LeagueSpec("mx", "Liga MX", "México", "4350", "2026-2027"),
     LeagueSpec("laliga", "LaLiga", "España", "4335", "2026-2027"),
     LeagueSpec("mls", "MLS", "EE.UU.", "4346", "2026"),
 )
+
+
+def _group_label(raw: str | None, league_label: str) -> str | None:
+    """Trim the API's group name down to the part that identifies the phase.
+
+    It arrives qualified by the competition — "Primera Division: Tabla
+    Anual", "Liga MX: Apertura" — which is redundant next to a chip that
+    already says which league is on screen.
+    """
+    if not raw:
+        return None
+    name = raw.split(":", 1)[-1].strip() if ":" in raw else raw.strip()
+    name = re.sub(r"\bGroup\b", "Zona", name)
+    name = re.sub(r"\s*-\s*", " · ", name)
+    return name or None
 
 
 @dataclass
@@ -54,7 +80,7 @@ class TeamRow:
     loss: int
     goal_diff: int
     points: int
-    conference: str | None = None
+    group: str | None = None
     badge: str | None = None
 
 
@@ -72,6 +98,19 @@ class Standing:
     def started(self) -> bool:
         """False before a season's first matchday, when every row is zeroed."""
         return any(r.played > 0 for r in self.rows)
+
+    @property
+    def groups(self) -> list[str]:
+        """Phases/zones present, in the order the API returned them.
+
+        Empty when the league runs a single table, which is the signal for
+        the display to skip the sub-tabs entirely.
+        """
+        seen: list[str] = []
+        for row in self.rows:
+            if row.group and row.group not in seen:
+                seen.append(row.group)
+        return seen if len(seen) > 1 else []
 
 
 def _as_int(value) -> int:
@@ -110,7 +149,11 @@ async def _fetch_one(client: httpx.AsyncClient, spec: LeagueSpec) -> Standing:
                 loss=_as_int(entry.get("intLoss")),
                 goal_diff=_as_int(entry.get("intGoalDifference")),
                 points=_as_int(entry.get("intPoints")),
-                conference=entry.get("strConference") or entry.get("strDivision"),
+                # `strGroup` is where the phase actually lives. The older
+                # `strConference`/`strDivision` pair reads None on every
+                # league checked, so the MLS conference label it was meant
+                # to produce never once appeared.
+                group=_group_label(entry.get("strGroup"), spec.label),
                 badge=entry.get("strBadge"),
             )
         )
@@ -137,6 +180,7 @@ def to_rows(standings: list[Standing]) -> list[dict]:
             "started": s.started,
             "error": s.error,
             "limited_to": ROW_LIMIT,
+            "groups": s.groups,
             "rows": [
                 {
                     "rank": r.rank,
@@ -147,7 +191,7 @@ def to_rows(standings: list[Standing]) -> list[dict]:
                     "loss": r.loss,
                     "goal_diff": r.goal_diff,
                     "points": r.points,
-                    "conference": r.conference,
+                    "group": r.group,
                 }
                 for r in s.rows
             ],

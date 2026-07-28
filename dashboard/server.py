@@ -42,6 +42,7 @@ from moneyclush.data.trending import fetch_trending
 from moneyclush.data.trending import to_rows as trending_to_rows
 from moneyclush.data.opening_prices import OpeningPriceCache
 from moneyclush import notify as push
+from moneyclush import trend_sim
 from moneyclush.data.models import (
     MarketInfo,
     MarketState,
@@ -55,6 +56,7 @@ from moneyclush.signals.order_book import combined_pair_cost, order_book_imbalan
 from moneyclush.strategies.temporal_arbitrage import TemporalArbitrageStrategy
 
 CLOB_URL = "https://clob.polymarket.com"
+GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
 OKX_URL = "https://www.okx.com/api/v5/market/ticker"
 COINBASE_URL = "https://api.coinbase.com/v2/prices"
 
@@ -916,6 +918,63 @@ async def poll_loop() -> None:
             await asyncio.sleep(3)
 
 
+async def sync_trend_bets(client: httpx.AsyncClient) -> None:
+    """Mark open trending positions to market, then settle finished ones.
+
+    Two sources are needed, not one. The trending feed carries live prices
+    but only lists events that are still open and still high-volume, so a
+    position whose event resolved simply disappears from it — and a
+    disappearance is ambiguous: the event may have settled, or it may have
+    merely fallen out of the top-volume window. Only a direct lookup can
+    tell those apart, so anything missing from the feed gets one.
+    """
+    open_bets, _ = store.load_trend_bets()
+    if not open_bets:
+        return
+
+    now_ms = int(time.time() * 1000)
+    live: dict[str, dict[str, float]] = {}
+    for row in TRENDING_CACHE["rows"]:
+        live[str(row["id"])] = {
+            o["label"]: o["prob"] for o in (row.get("outcomes") or [])
+        }
+
+    for bet in open_bets:
+        prices = live.get(str(bet["event_id"]))
+        if prices and bet["outcome"] in prices:
+            store.mark_trend_bet(bet["id"], prices[bet["outcome"]], now_ms)
+            continue
+
+        try:
+            resp = await client.get(
+                GAMMA_EVENTS,
+                params={"id": bet["event_id"]},
+                headers=UA_HEADERS,
+                timeout=12,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:
+            log.warning("trend.lookup_failed", error=str(exc)[:80])
+            continue
+        if not payload:
+            continue
+
+        final = trend_sim.find_settlement(payload[0], bet["outcome"])
+        if final is None:
+            continue  # still open, just not trending any more
+
+        pnl = trend_sim.position_pnl(
+            bet["entry_price"], bet["stake"] or 1.0, final
+        )
+        store.close_trend_bet(bet["id"], final, now_ms, "resolved", pnl)
+        add_alert(
+            "resolve",
+            f"DESTACADO resuelto: {str(bet['outcome'])[:40]} → "
+            f"{'+' if pnl >= 0 else ''}{pnl:.2f}$",
+        )
+
+
 async def prediction_loop() -> None:
     """Back the favourite on new fixtures, then settle the ones that ended.
 
@@ -938,6 +997,7 @@ async def prediction_loop() -> None:
                 matches = await fetch_todays_matches(client)
                 added = PREDICTIONS.record(matches, min_prob=PREDICTION_MIN_PROB)
                 settled = await PREDICTIONS.resolve(client)
+                await sync_trend_bets(client)
 
             if added or settled:
                 log.info("predictions.tick", added=added, settled=settled)
@@ -1213,6 +1273,97 @@ async def post_manual_prediction(payload: dict = Body(...)) -> JSONResponse:
         f"· paga ${prediction.potential_payout:.2f}",
     )
     return JSONResponse({"ok": True, "prediction": asdict(prediction)})
+
+
+@app.get("/api/trend")
+async def get_trend_sim() -> JSONResponse:
+    """Open trending positions with their running mark, plus closed history."""
+    open_bets, closed = store.load_trend_bets()
+    for bet in open_bets:
+        mark = bet.get("last_price")
+        if mark is None:
+            mark = bet["entry_price"]
+        bet["unrealised"] = round(
+            trend_sim.position_pnl(bet["entry_price"], bet["stake"] or 1.0, mark), 4
+        )
+    return JSONResponse(
+        {
+            "open": open_bets,
+            "closed": closed,
+            "stats": trend_sim.summarise(closed, open_bets),
+        }
+    )
+
+
+@app.post("/api/trend/open")
+async def post_trend_open(payload: dict = Body(...)) -> JSONResponse:
+    """Enter a trending outcome, but only inside the strong-favourite band."""
+    required = ("event_id", "outcome", "price")
+    missing = [f for f in required if payload.get(f) in (None, "")]
+    if missing:
+        return JSONResponse(
+            {"error": f"faltan campos: {', '.join(missing)}"}, status_code=400
+        )
+
+    try:
+        price = float(payload["price"])
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "precio inválido"}, status_code=400)
+
+    rejection = trend_sim.entry_rejection(price)
+    if rejection:
+        return JSONResponse({"error": rejection}, status_code=400)
+
+    event_id = str(payload["event_id"])
+    outcome = str(payload["outcome"])
+    if store.has_open_trend_bet(event_id, outcome):
+        return JSONResponse(
+            {"error": "ya tienes una posición abierta en ese resultado"},
+            status_code=409,
+        )
+
+    now_ms = int(time.time() * 1000)
+    bet_id = store.open_trend_bet(
+        event_id=event_id,
+        title=str(payload.get("title") or ""),
+        url=str(payload.get("url") or ""),
+        category=str(payload.get("category") or ""),
+        outcome=outcome,
+        entry_price=price,
+        entry_at=now_ms,
+        stake=PREDICTION_STAKE,
+    )
+    add_alert(
+        "info",
+        f"Destacados: entrada {outcome[:32]} @ {price * 100:.0f}¢",
+    )
+    return JSONResponse({"ok": True, "id": bet_id})
+
+
+@app.post("/api/trend/close")
+async def post_trend_close(payload: dict = Body(...)) -> JSONResponse:
+    """Sell an open position at its current mark, before resolution."""
+    try:
+        bet_id = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "id inválido"}, status_code=400)
+
+    open_bets, _ = store.load_trend_bets()
+    bet = next((b for b in open_bets if b["id"] == bet_id), None)
+    if bet is None:
+        return JSONResponse({"error": "posición no encontrada"}, status_code=404)
+
+    mark = bet.get("last_price")
+    if mark is None:
+        mark = bet["entry_price"]
+    pnl = trend_sim.position_pnl(bet["entry_price"], bet["stake"] or 1.0, mark)
+    store.close_trend_bet(bet_id, mark, int(time.time() * 1000), "manual", pnl)
+    add_alert(
+        "info",
+        f"Destacados: salida {str(bet['outcome'])[:32]} @ {mark * 100:.0f}¢ "
+        f"· {'+' if pnl >= 0 else ''}{pnl:.2f}$",
+    )
+    return JSONResponse({"ok": True, "pnl": round(pnl, 4)})
 
 
 @app.get("/api/standings")

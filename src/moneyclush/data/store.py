@@ -159,6 +159,32 @@ def _init(conn: sqlite3.Connection) -> None:
             payload       TEXT NOT NULL
         );
 
+        -- Positions on trending (non-sports) events, entered only on
+        -- strong favourites. Unlike every other track here these do not
+        -- have to be held to resolution: a trending market can take months
+        -- to settle, so the position is marked to market on every refresh
+        -- and can be sold at the price showing then. `last_price` is that
+        -- mark; `exit_price` is what it was actually closed at.
+        CREATE TABLE IF NOT EXISTS trend_bets (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id      TEXT NOT NULL,
+            title         TEXT,
+            url           TEXT,
+            category      TEXT,
+            outcome       TEXT NOT NULL,
+            entry_price   REAL NOT NULL,
+            entry_at      INTEGER NOT NULL,
+            stake         REAL NOT NULL DEFAULT 1.0,
+            last_price    REAL,
+            last_at       INTEGER,
+            status        TEXT NOT NULL DEFAULT 'open',
+            exit_price    REAL,
+            exit_at       INTEGER,
+            exit_reason   TEXT,
+            pnl           REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_trend_status ON trend_bets(status);
+
         -- One row per process start. This is what makes durability a
         -- measurement instead of a guess.
         CREATE TABLE IF NOT EXISTS boots (
@@ -458,6 +484,84 @@ def load_paper_history(limit: int = 600) -> tuple[list[list], dict]:
 def paper_pnl() -> float:
     row = connect().execute("SELECT COALESCE(SUM(pnl), 0) AS s FROM paper_bets").fetchone()
     return float(row["s"])
+
+
+# ------------------------------------------------------- trending simulator
+
+def open_trend_bet(
+    event_id: str,
+    title: str,
+    url: str,
+    category: str,
+    outcome: str,
+    entry_price: float,
+    entry_at: int,
+    stake: float = 1.0,
+) -> int:
+    conn = connect()
+    with _lock:
+        cur = conn.execute(
+            """INSERT INTO trend_bets
+                 (event_id, title, url, category, outcome, entry_price,
+                  entry_at, stake, last_price, last_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')""",
+            (event_id, title, url, category, outcome, entry_price,
+             entry_at, stake, entry_price, entry_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def has_open_trend_bet(event_id: str, outcome: str) -> bool:
+    row = connect().execute(
+        """SELECT 1 FROM trend_bets
+           WHERE event_id = ? AND outcome = ? AND status = 'open' LIMIT 1""",
+        (event_id, outcome),
+    ).fetchone()
+    return row is not None
+
+
+def mark_trend_bet(bet_id: int, price: float, at: int) -> None:
+    """Update the running mark without closing the position."""
+    conn = connect()
+    with _lock:
+        conn.execute(
+            "UPDATE trend_bets SET last_price = ?, last_at = ? WHERE id = ?",
+            (price, at, bet_id),
+        )
+        conn.commit()
+
+
+def close_trend_bet(
+    bet_id: int, exit_price: float, exit_at: int, reason: str, pnl: float
+) -> None:
+    conn = connect()
+    with _lock:
+        conn.execute(
+            """UPDATE trend_bets
+                  SET status = 'closed', exit_price = ?, exit_at = ?,
+                      exit_reason = ?, pnl = ?, last_price = ?, last_at = ?
+                WHERE id = ? AND status = 'open'""",
+            (exit_price, exit_at, reason, pnl, exit_price, exit_at, bet_id),
+        )
+        conn.commit()
+
+
+def _trend_row(row: sqlite3.Row) -> dict:
+    return {k: row[k] for k in row.keys()}
+
+
+def load_trend_bets(limit: int = 200) -> tuple[list[dict], list[dict]]:
+    """(open positions, closed history) — newest entry first."""
+    conn = connect()
+    rows = conn.execute(
+        "SELECT * FROM trend_bets ORDER BY entry_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    parsed = [_trend_row(r) for r in rows]
+    return (
+        [r for r in parsed if r["status"] == "open"],
+        [r for r in parsed if r["status"] != "open"],
+    )
 
 
 # ------------------------------------------------------------ push subscriptions
