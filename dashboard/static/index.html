@@ -1845,11 +1845,17 @@ document.addEventListener('DOMContentLoaded', function() {
         oneColumnSize: 768
     });
     grids.forEach(grid => {
-        let saved = localStorage.getItem('grid-layout-v3-' + grid.el.id);
+        let saved = localStorage.getItem('grid-layout-v4-' + grid.el.id);
         if (saved) {
-            try { 
-                grid.load(JSON.parse(saved)); 
-                
+            try {
+                // `false` = reposition existing panels only, never add or
+                // remove DOM nodes. Without it, a saved item that GridStack
+                // can't match to the live DOM gets inserted as a brand new
+                // widget carrying whatever content was frozen into the save
+                // — a second copy of the panel sitting next to the real,
+                // live one.
+                grid.load(JSON.parse(saved), false);
+
                 // Restaurar clase colapsada si el alto es 1
                 grid.engine.nodes.forEach(node => {
                     if (node.h === 1 && node.el) {
@@ -1860,7 +1866,10 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (e) {}
         }
         grid.on('change', function() {
-            localStorage.setItem('grid-layout-v3-' + grid.el.id, JSON.stringify(grid.save()));
+            // `false` excludes each panel's live innerHTML from the saved
+            // layout — only position/size should persist, never the data
+            // that happened to be on screen at save time.
+            localStorage.setItem('grid-layout-v4-' + grid.el.id, JSON.stringify(grid.save(false)));
         });
     });
 
