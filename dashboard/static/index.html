@@ -379,6 +379,7 @@
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
     <button class="tab" data-view="trending">DESTACADOS</button>
+    <button class="tab" data-view="kalshi">KALSHI</button>
   <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
     <span class="h-bot-label">BOT</span>
     <canvas id="h-bot-spark" width="70" height="16"></canvas>
@@ -696,8 +697,53 @@
     </div>
 </div>
 
+<!-- ============ VISTA KALSHI ============ -->
+<div class="grid-stack" id="view-kalshi" style="display:none">
+    <div class="grid-stack-item" gs-id="kalshi-ladders" gs-x="0" gs-y="0" gs-w="8" gs-h="13">
+      <div class="grid-stack-item-content panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">ESCALERAS DE STRIKES · KALSHI</span>
+        <i class="info" data-key="kalshi-ladders">i</i>
+        <span class="badge" id="kalshi-count">—</span>
+        <span class="badge amber" id="kalshi-age" style="display:none">—</span></div>
+      <div class="panel-body" id="kalshi-body" style="overflow-y:auto">
+        <div class="dim" style="padding:6px">cargando…</div>
+      </div>
+      </div>
+    </div>
+
+    <div class="grid-stack-item" gs-id="kalshi-arb" gs-x="8" gs-y="0" gs-w="4" gs-h="5">
+      <div class="grid-stack-item-content panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">ARBITRAJE DE ESCALERA</span>
+        <i class="info" data-key="kalshi-arb">i</i>
+        <span class="badge" id="kalshi-arb-count">0</span></div>
+      <div class="panel-body" id="kalshi-arb-body" style="max-height:300px; overflow-y:auto">
+        <div class="dim">sin oportunidades</div>
+      </div>
+      </div>
+    </div>
+
+    <div class="grid-stack-item" gs-id="kalshi-opps" gs-x="0" gs-y="13" gs-w="12" gs-h="7">
+      <div class="grid-stack-item-content panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">OPORTUNIDADES POR CATEGORÍA</span>
+        <i class="info" data-key="kalshi-opps">i</i>
+        <span class="badge" id="opps-count">—</span></div>
+      <div class="panel-body" id="opps-body" style="overflow-y:auto">
+        <div class="dim" style="padding:6px">cargando…</div>
+      </div>
+      </div>
+    </div>
+
+    <div class="grid-stack-item" gs-id="kalshi-venue" gs-x="8" gs-y="5" gs-w="4" gs-h="8">
+      <div class="grid-stack-item-content panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">KALSHI vs POLYMARKET</span>
+        <i class="info" data-key="kalshi-venue">i</i></div>
+      <div class="panel-body" id="kalshi-venue-body" style="overflow-y:auto"></div>
+      </div>
+    </div>
+</div>
+
 <div class="footer-note">
-  datos: gamma-api.polymarket.com + clob.polymarket.com + okx/coinbase spot &middot; refresh 3s &middot; ejecución simulada (paper) — sin órdenes reales
+  datos: gamma-api.polymarket.com + clob.polymarket.com + api.elections.kalshi.com + okx/coinbase spot &middot; refresh 3s &middot; ejecución simulada (paper) — sin órdenes reales
 </div>
 
 <div id="tooltip"></div>
@@ -729,6 +775,10 @@ const INFO = {
   sports: ["PARTIDOS", "Partidos reales de Polymarket que resuelven en las próximas 52 horas. El título enlaza al mercado en Polymarket. Filtros: HOY incluye los que están en juego; EN VIVO solo los que ya empezaron; MAÑANA suele estar vacío de madrugada porque Polymarket publica la jornada unas 24-36h antes; DESTACADOS ordena por volumen negociado. El porcentaje es la probabilidad implícita por el mercado, ya normalizada: los precios brutos suman más de 100% porque incluyen el margen, así que se reparte proporcionalmente. La cifra pequeña a la derecha es el ask — lo que costaría comprar ahora, no el último precio negociado. SUMA es lo que pagarías por comprar todos los resultados: por encima de 100¢ es el margen del mercado, por debajo sería arbitraje. En esports los dos lados salen de un mismo mercado como tokens complementarios, así que su suma es siempre 100¢ + spread y el arbitraje es imposible por construcción."],
   arb: ["ARBITRAJE UP+DOWN", "La única oportunidad que no depende de acertar el fair value. Si comprar Up y Down juntos cuesta menos de 100¢, cobras 1$ al resolver gane quien gane. Se descuenta 1.8% de comisiones y slippage sobre las dos patas, y se mide contra la profundidad real del libro para 25 shares, no contra el mejor precio de pantalla. SRC indica si el libro vino del WebSocket (ws) o de REST — estas ventanas duran menos de un ciclo de polling."],
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
+  "kalshi-ladders": ["ESCALERAS DE STRIKES · KALSHI", "Kalshi no lista BTC como un solo Sí/No: lista una escalera de strikes sobre la misma hora ('por encima de $63.750', 'por encima de $64.000'...). Cada peldaño es un digital independiente con su propio libro. MID es el punto medio del libro; SPREAD es lo que separa la compra de la venta — en BTC suele ser de 12 a 29 céntimos, mucho más ancho que Polymarket. FEE es la comisión de ida y vuelta: Kalshi cobra 0,07 × P × (1−P) por contrato y Polymarket no cobra nada, así que un hueco de 2¢ que sería dinero gratis allí aquí es una pérdida. MODELO es nuestra Φ(distancia/σ restante) aplicada al strike, y DIF su distancia contra el mercado — se muestra como diagnóstico, no como señal: el backtest de 299 ventanas ya demostró que este modelo no bate al mercado."],
+  "kalshi-arb": ["ARBITRAJE DE ESCALERA", "La oportunidad que solo existe en Kalshi, porque nace de listar muchos strikes sobre el mismo subyacente y la misma hora. 'BTC por encima de 63.000' no puede ser menos probable que 'BTC por encima de 64.000': todo mundo donde paga el strike alto paga también el bajo. Así que comprar el strike bajo y vender el alto da un pago de 1$ dentro de la banda y 0$ fuera — nunca negativo. Si además el ask del strike bajo está por DEBAJO del bid del alto, cobras por adelantado por sostener algo que nunca pierde: eso es arbitraje sin riesgo. La columna NETO ya descuenta la comisión de las dos patas. Que esté vacío es lo normal y lo honesto: significa que la escalera es internamente coherente ahora mismo."],
+  "kalshi-opps": ["OPORTUNIDADES POR CATEGORÍA", "Las cuatro estrategias que no son BTC Up/Down, corriendo sobre el estado actual de los dos mercados. La columna TIPO es lo que de verdad importa. ESTRUCTURAL significa que la ganancia es aritmética y no depende de acertar nada: comprar todos los resultados de un partido por menos de $1, o explotar que una escalera de strikes se contradiga a sí misma. Son las únicas marcadas como accionables. ESTADÍSTICA significa que depende de un sesgo que medimos pero no confirmamos — el favorito sobrevalorado, con p=0.031 sobre 299 ventanas, que necesita ~1000 para concluir; se muestran para seguir midiendo, no para operar. Que la lista de estructurales esté vacía es lo habitual y es información: significa que ahora mismo ninguna casa se está contradiciendo."],
+  "kalshi-venue": ["KALSHI vs POLYMARKET", "Las dos casas preguntan lo mismo pero NO liquidan con el mismo número: Kalshi usa el índice BRTI de CF Benchmarks y Polymarket usa Chainlink. Por eso una diferencia de precio entre ambas no es automáticamente arbitraje — parte es base entre índices, y esa parte no se cobra nunca. A eso hay que restarle la comisión de Kalshi, que Polymarket no tiene. Este panel muestra el hueco bruto y lo que queda después de comisiones, para no confundir las dos cosas."],
   "trend-sim": ["SIMULADOR FAVORITOS · DESTACADOS", "Posiciones de $1 sobre sucesos destacados, entrando solo a favoritos de 75¢ o más — la banda donde el backtest encontró que el mercado los sobrevalora. A diferencia del resto del proyecto, aquí NO hay que esperar a la resolución: un mercado destacado puede tardar meses en cerrar, así que la posición se valora contra el precio actual y puedes VENDER cuando quieras. $1 a 80¢ compra 1.25 shares; si el precio sube a 88¢ vendes con +$0.10, y si aguantas hasta el final ganas +$0.25 o pierdes el dólar entero. Por eso las estadísticas separan AGUANTADAS de VENDIDAS: son dos preguntas distintas. Aguantar mide si el favorito acierta tanto como su precio promete. Vender mide si el precio sube después de entrar, acierte o no — un favorito que sube de 78¢ a 85¢ y luego pierde paga a quien vendió y arruina a quien aguantó."],
 };
 
@@ -1847,6 +1897,163 @@ async function refreshTrending() {
   }
 }
 
+/* ---------------- kalshi ----------------
+   A ladder is many books on one question, so the panel is grouped by
+   expiry rather than listed flat: the rungs only make sense against each
+   other. Fees are shown on every rung because Kalshi charges them and
+   Polymarket does not — the single biggest reason an edge that looks
+   tradeable here is not. */
+function renderKalshi(data) {
+  const ladders = data.ladders || [];
+  $("kalshi-count").textContent = ladders.length || "—";
+
+  const ageEl = $("kalshi-age");
+  if (data.age_s != null && data.age_s > 120) {
+    ageEl.style.display = "";
+    ageEl.textContent = "HACE " + Math.round(data.age_s / 60) + "MIN";
+  } else {
+    ageEl.style.display = "none";
+  }
+
+  if (!ladders.length) {
+    $("kalshi-body").innerHTML =
+      `<div class="dim" style="padding:6px">${data.error || "sin escaleras abiertas"}</div>`;
+    $("kalshi-arb-body").innerHTML = '<div class="dim">sin oportunidades</div>';
+    return;
+  }
+
+  $("kalshi-body").innerHTML = ladders.map(l => {
+    const rungs = (l.markets || []).map(m => {
+      const div = m.divergence;
+      const cls = div == null ? "dim" : (div > 0.03 ? "up" : (div < -0.03 ? "down" : "dim"));
+      return `<tr>
+        <td>${m.label}</td>
+        <td>${cents(m.bid)}</td>
+        <td>${cents(m.ask)}</td>
+        <td>${cents(m.mid)}</td>
+        <td class="dim">${cents(m.spread)}</td>
+        <td class="dim">${cents(m.fee_rt)}</td>
+        <td class="dim">${m.model == null ? "—" : cents(m.model)}</td>
+        <td class="${cls}">${div == null ? "—" : (div > 0 ? "+" : "") + cents(div)}</td>
+      </tr>`;
+    }).join("");
+
+    const arbBadge = l.arb_count
+      ? `<span class="badge">${l.arb_count} ARB · ${cents(l.best_arb)}</span>`
+      : "";
+
+    return `<div style="margin-bottom:14px">
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px">
+        <b>${l.series_label}</b>
+        <span class="dim">${l.title || ""}</span>
+        <span class="dim">· ${l.minutes_left == null ? "—" : l.minutes_left + "min"}</span>
+        <span class="dim">· vol ${fmt(l.volume, 0)}</span>
+        ${arbBadge}
+      </div>
+      <table><thead><tr>
+        <th>STRIKE</th><th>BID</th><th>ASK</th><th>MID</th>
+        <th>SPREAD</th><th>FEE</th><th>MODELO</th><th>DIF</th>
+      </tr></thead><tbody>${rungs}</tbody></table>
+    </div>`;
+  }).join("");
+
+  const allArbs = [];
+  ladders.forEach(l => (l.arbs || []).forEach(a =>
+    allArbs.push(Object.assign({series: l.series_label}, a))));
+  allArbs.sort((a, b) => b.net - a.net);
+
+  $("kalshi-arb-count").textContent = allArbs.length;
+  $("kalshi-arb-body").innerHTML = allArbs.length
+    ? allArbs.map(a => `<div class="sstat">
+        <span>${a.series} · ${a.low} → ${a.high}</span>
+        <b class="up">+${cents(a.net)}</b>
+      </div>
+      <div class="dim" style="font-size:10px; margin:-2px 0 6px">
+        crédito ${cents(a.credit)} − comisión ${cents(a.fees)}
+      </div>`).join("")
+    : `<div class="dim">Ninguna. La escalera es coherente: ningún strike bajo se compra
+       más barato de lo que se vende uno alto.</div>`;
+
+  const btc = ladders.find(l => l.series === "KXBTCD");
+  const near = btc && (btc.markets || [])
+    .filter(m => m.mid != null && m.mid > 0.2 && m.mid < 0.8)
+    .sort((a, b) => Math.abs(a.mid - 0.5) - Math.abs(b.mid - 0.5))[0];
+
+  $("kalshi-venue-body").innerHTML = near
+    ? `<div class="sstat"><span>strike más cercano a 50¢</span><b>${near.label}</b></div>
+       <div class="sstat"><span>mid Kalshi</span><b>${cents(near.mid)}</b></div>
+       <div class="sstat"><span>spread</span><b>${cents(near.spread)}</b></div>
+       <div class="sstat"><span>comisión ida y vuelta</span><b class="down">${cents(near.fee_rt)}</b></div>
+       <div class="sstat"><span>coste de cruzar</span>
+         <b class="down">${cents((near.spread || 0) + (near.fee_rt || 0))}</b></div>
+       <div class="dim" style="margin-top:8px; font-size:11px; line-height:1.5">
+         Ese último número es el umbral real: en Polymarket cruzar el spread de BTC
+         cuesta una fracción de esto y no hay comisión. Kalshi liquida con CF Benchmarks
+         y Polymarket con Chainlink, así que parte de cualquier diferencia entre las dos
+         es base entre índices y no se cobra jamás.
+       </div>`
+    : '<div class="dim">sin escalera de BTC abierta</div>';
+}
+
+async function refreshKalshi() {
+  if (currentView !== "kalshi") return;
+  try {
+    const r = await fetch("/api/kalshi");
+    renderKalshi(await r.json());
+  } catch (e) {
+    $("kalshi-body").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
+  }
+}
+
+/* Structural edges are arithmetic and tradeable; statistical ones are a
+   hypothesis still being measured. The table keeps them apart on purpose. */
+const OPP_KIND = {
+  structural: ["ESTRUCTURAL", "up"],
+  statistical: ["ESTADÍSTICA", "amber"],
+  speculative: ["ESPECULATIVA", "dim"],
+};
+
+function renderOpportunities(data) {
+  const opps = data.opportunities || [];
+  const structural = opps.filter(o => o.actionable).length;
+  $("opps-count").textContent = `${structural} accionables / ${opps.length}`;
+
+  if (!opps.length) {
+    $("opps-body").innerHTML =
+      `<div class="dim" style="padding:6px">${data.error || "sin oportunidades"}</div>`;
+    return;
+  }
+
+  $("opps-body").innerHTML = `<table><thead><tr>
+      <th>TIPO</th><th>ESTRATEGIA</th><th>CASA</th><th>MERCADO</th>
+      <th>EDGE</th><th>POR QUÉ</th>
+    </tr></thead><tbody>${opps.map(o => {
+      const [kindLabel, kindCls] = OPP_KIND[o.kind] || ["—", "dim"];
+      const name = o.label.length > 46 ? o.label.slice(0, 46) + "…" : o.label;
+      const cell = o.url
+        ? `<a href="${o.url}" target="_blank" rel="noopener">${name}</a>`
+        : name;
+      return `<tr>
+        <td class="${kindCls}">${kindLabel}</td>
+        <td class="dim">${o.strategy}</td>
+        <td class="dim">${o.venue}</td>
+        <td>${cell}</td>
+        <td class="${o.actionable ? "up" : "dim"}">${o.edge > 0 ? "+" : ""}${cents(o.edge)}</td>
+        <td class="dim" style="white-space:normal; font-size:10px">${o.evidence}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+async function refreshOpportunities() {
+  if (currentView !== "kalshi") return;
+  try {
+    const r = await fetch("/api/opportunities");
+    renderOpportunities(await r.json());
+  } catch (e) {
+    $("opps-body").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
+  }
+}
+
 document.querySelectorAll("#sports-filters .filt").forEach(btn => {
   btn.addEventListener("click", () => {
     sportsFilter = btn.dataset.f;
@@ -1865,7 +2072,7 @@ document.querySelectorAll("#trending-filters .filt").forEach(btn => {
   });
 });
 
-const VIEWS = ["crypto", "sports", "trending"];
+const VIEWS = ["crypto", "sports", "trending", "kalshi"];
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     currentView = btn.dataset.view;
@@ -1880,6 +2087,7 @@ document.querySelectorAll(".tab").forEach(btn => {
       refreshTrending(); refreshNews("general", "news-general"); refreshPredictions();
       refreshTrendSim();
     }
+    if (currentView === "kalshi") { refreshKalshi(); refreshOpportunities(); }
   });
 });
 
@@ -1895,6 +2103,8 @@ setInterval(refreshTrending, 60000);
 setInterval(refreshTrendSim, 60000);
 setInterval(refreshPredictions, 30000);
 setInterval(refreshStandings, 600000);
+setInterval(refreshKalshi, 45000);
+setInterval(refreshOpportunities, 60000);
 
 document.querySelectorAll("#pred-log-filters .filt").forEach(btn => {
   btn.addEventListener("click", () => {

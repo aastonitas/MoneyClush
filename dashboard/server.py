@@ -31,6 +31,8 @@ log = structlog.get_logger()
 from moneyclush.data.clob_websocket import ClobWebSocket
 from moneyclush.data.consensus_price import ConsensusFeed
 from moneyclush.data.market_discovery import UA_HEADERS, discover_active_markets
+from moneyclush.data.kalshi import fetch_crypto_ladders
+from moneyclush.data.kalshi import to_rows as kalshi_to_rows
 from moneyclush.data.news import fetch_headlines
 from moneyclush.data.news import to_rows as news_to_rows
 from moneyclush.data.predictions import PredictionLedger
@@ -51,8 +53,13 @@ from moneyclush.data.models import (
     OutcomeSide,
     Position,
 )
-from moneyclush.pricing.fair_value import FairValueEngine
+from moneyclush.pricing.fair_value import FairValueEngine, brownian_probability
 from moneyclush.signals.order_book import combined_pair_cost, order_book_imbalance
+from moneyclush.strategies.categories import (
+    FavouriteFade,
+    LadderArb,
+    SportsBasketArb,
+)
 from moneyclush.strategies.temporal_arbitrage import TemporalArbitrageStrategy
 
 CLOB_URL = "https://clob.polymarket.com"
@@ -145,6 +152,21 @@ NEWS_CACHE: dict[str, dict] = {
 }
 TRENDING_TTL = 120.0
 TRENDING_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
+
+# Kalshi's hourly ladders reprice on the scale of seconds like any book,
+# but the strike list itself only changes once an hour, and the panel is
+# read far less often than the BTC scanner.
+KALSHI_TTL = 45.0
+KALSHI_CACHE: dict = {"rows": [], "fetched_at": 0.0, "error": None}
+
+# Which spot price to compare each Kalshi series against. The ladder asks
+# "will X be above this strike at the close", so the model needs the same
+# asset's spot to compute a distance.
+KALSHI_SPOT_KEY = {
+    "KXBTCD": "btc_price", "KXBTC15M": "btc_price",
+    "KXETHD": "eth_price", "KXETH15M": "eth_price",
+    "KXSOLD": "sol_price", "KXXRPD": "xrp_price",
+}
 
 # Favourite-backing ledger. Only fixtures the market rates at 55%+ are
 # picked: below that there is no meaningful favourite to back.
@@ -1198,6 +1220,152 @@ async def get_trending() -> JSONResponse:
                 "error": TRENDING_CACHE["error"],
             }
         )
+
+
+# Sigma is calibrated from BTC 1-minute candles for 5-15 minute windows.
+# Reusing that number for SOL or XRP prices a different asset's volatility
+# with Bitcoin's, and stretching it across a 13-hour daily settlement
+# extrapolates far past where it was measured. Both produce confident
+# nonsense — a 100c "fair value" against a market quoting 88c. The project
+# already settled this question for opening prices: if the input cannot be
+# obtained honestly, do not value the market rather than substitute an
+# estimate. The same rule applies here.
+MODEL_SERIES = {"KXBTCD", "KXBTC15M"}
+MODEL_MAX_HORIZON_MIN = 120.0
+
+
+def annotate_with_model(rows: list[dict]) -> list[dict]:
+    """Price Kalshi strikes with our own model where that is defensible.
+
+    A ladder rung is the same object the BTC scanner already prices — a
+    digital on where the asset lands — so the Brownian model applies
+    unchanged: P(above K) = Phi(distance / sigma_remaining), with distance
+    measured from spot to the strike instead of to a window's opening.
+
+    Rungs outside the calibrated asset or horizon get None, which the
+    panel renders as a dash. The gap is reported, never acted on: the
+    299-window backtest showed this model does not beat Polymarket's
+    pricing, and nothing about Kalshi changes that. The column exists to
+    flag rungs where the two venues disagree by more than fees explain.
+    """
+    for row in rows:
+        spot = _as_float(STATE.get(KALSHI_SPOT_KEY.get(row["series"], ""), 0.0)) or 0.0
+        minutes = row.get("minutes_left")
+        priceable = (
+            row["series"] in MODEL_SERIES
+            and spot > 0
+            and minutes is not None
+            and 0 < minutes <= MODEL_MAX_HORIZON_MIN
+        )
+
+        for market in row["markets"]:
+            strike, mid = market.get("strike"), market.get("mid")
+            if not priceable or not strike or mid is None:
+                market["model"] = None
+                market["divergence"] = None
+                continue
+
+            distance = (spot - strike) / spot
+            model_p = brownian_probability(
+                distance, fv_engine.sigma_per_minute, minutes * 60.0
+            )
+            market["model"] = round(model_p, 4)
+            # Positive means the model thinks the rung is too cheap.
+            market["divergence"] = round(model_p - mid, 4)
+    return rows
+
+
+@app.get("/api/kalshi")
+async def get_kalshi() -> JSONResponse:
+    """Kalshi's crypto ladders, their internal arbitrages, and the model gap.
+
+    This is a second venue asking questions Polymarket also asks, but
+    settling them against CF Benchmarks rather than Chainlink and charging
+    a taker fee where Polymarket charges none. Both differences are shown
+    per row so a gap is never mistaken for free money.
+    """
+    now = time.time()
+    if KALSHI_CACHE["rows"] and now - KALSHI_CACHE["fetched_at"] < KALSHI_TTL:
+        return JSONResponse(
+            {"ladders": KALSHI_CACHE["rows"], "cached": True,
+             "age_s": round(now - KALSHI_CACHE["fetched_at"]),
+             "error": KALSHI_CACHE["error"]}
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            groups = await fetch_crypto_ladders(client)
+        rows = annotate_with_model(kalshi_to_rows(groups))
+        KALSHI_CACHE.update(rows=rows, fetched_at=now, error=None)
+
+        total_arbs = sum(r["arb_count"] for r in rows)
+        if total_arbs:
+            best = max((r["best_arb"] or 0) for r in rows)
+            add_alert("info", f"KALSHI {total_arbs} arb(s) de escalera, mejor {best*100:.1f}¢")
+
+        return JSONResponse({"ladders": rows, "cached": False, "age_s": 0})
+    except Exception as exc:
+        log.warning("kalshi.fetch_failed", error=str(exc)[:120])
+        KALSHI_CACHE["error"] = str(exc)[:120]
+        return JSONResponse(
+            {
+                "ladders": KALSHI_CACHE["rows"],
+                "cached": True,
+                "age_s": round(now - KALSHI_CACHE["fetched_at"])
+                if KALSHI_CACHE["fetched_at"] else None,
+                "error": KALSHI_CACHE["error"],
+            }
+        )
+
+
+# The category scanners are stateless, so one instance each is enough.
+CATEGORY_STRATEGIES = (SportsBasketArb(), LadderArb(), FavouriteFade())
+
+
+@app.get("/api/opportunities")
+async def get_opportunities() -> JSONResponse:
+    """Every category strategy run over the current snapshot.
+
+    Opportunities are returned with their `kind` intact so the panel can
+    keep structural edges (arithmetic, tradeable) visually separate from
+    statistical ones (a measured but unconfirmed bias). Collapsing the two
+    into a single "edge" column is exactly how an unproven hypothesis
+    turns into a live position by accident.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            ladders, matches = await asyncio.gather(
+                fetch_crypto_ladders(client),
+                fetch_todays_matches(client),
+            )
+    except Exception as exc:
+        log.warning("opportunities.fetch_failed", error=str(exc)[:120])
+        return JSONResponse({"opportunities": [], "error": str(exc)[:120]})
+
+    source = {"sports_basket_arb": matches, "kalshi_ladder_arb": ladders,
+              "favourite_fade": matches}
+
+    rows = []
+    for strategy in CATEGORY_STRATEGIES:
+        for opp in strategy.scan(source[strategy.name])[:12]:
+            rows.append(
+                {
+                    "strategy": opp.strategy,
+                    "venue": opp.venue,
+                    "category": opp.category,
+                    "kind": opp.kind.value,
+                    "actionable": opp.actionable,
+                    "label": opp.label,
+                    "edge": round(opp.edge, 4),
+                    "rationale": opp.rationale,
+                    "evidence": opp.evidence,
+                    "url": opp.url,
+                }
+            )
+
+    # Structural first: those are the ones worth acting on.
+    rows.sort(key=lambda r: (not r["actionable"], -r["edge"]))
+    return JSONResponse({"opportunities": rows, "count": len(rows)})
 
 
 @app.get("/api/predictions")
