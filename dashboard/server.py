@@ -55,6 +55,7 @@ from moneyclush.data.models import (
 )
 from moneyclush.pricing.fair_value import FairValueEngine, brownian_probability
 from moneyclush.signals.order_book import combined_pair_cost, order_book_imbalance
+from moneyclush.signals.trading_desk import build_desk
 from moneyclush.strategies.categories import (
     FavouriteFade,
     LadderArb,
@@ -1321,26 +1322,30 @@ async def get_kalshi() -> JSONResponse:
 # The category scanners are stateless, so one instance each is enough.
 CATEGORY_STRATEGIES = (SportsBasketArb(), LadderArb(), FavouriteFade())
 
+# Signals the user said they acted on. Kept on disk because the only
+# question that matters about a recommendation tool — did following it
+# make money — cannot be answered from a log that resets every restart.
+TAKEN_FILE = DATA_DIR / "signals_taken.jsonl"
+OPPS_TTL = 60.0
+OPPS_CACHE: dict = {"rows": [], "fetched_at": 0.0}
 
-@app.get("/api/opportunities")
-async def get_opportunities() -> JSONResponse:
-    """Every category strategy run over the current snapshot.
 
-    Opportunities are returned with their `kind` intact so the panel can
-    keep structural edges (arithmetic, tradeable) visually separate from
-    statistical ones (a measured but unconfirmed bias). Collapsing the two
-    into a single "edge" column is exactly how an unproven hypothesis
-    turns into a live position by accident.
+async def scan_opportunities() -> list[dict]:
+    """Category-strategy rows, cached so the trading desk can poll fast.
+
+    The desk refreshes on a few seconds; the sports and Kalshi fetches
+    behind it take seconds each. Without a cache between them, every tick
+    of the trading tab would re-hit both venues.
     """
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            ladders, matches = await asyncio.gather(
-                fetch_crypto_ladders(client),
-                fetch_todays_matches(client),
-            )
-    except Exception as exc:
-        log.warning("opportunities.fetch_failed", error=str(exc)[:120])
-        return JSONResponse({"opportunities": [], "error": str(exc)[:120]})
+    now = time.time()
+    if OPPS_CACHE["rows"] and now - OPPS_CACHE["fetched_at"] < OPPS_TTL:
+        return OPPS_CACHE["rows"]
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        ladders, matches = await asyncio.gather(
+            fetch_crypto_ladders(client),
+            fetch_todays_matches(client),
+        )
 
     source = {"sports_basket_arb": matches, "kalshi_ladder_arb": ladders,
               "favourite_fade": matches}
@@ -1362,6 +1367,121 @@ async def get_opportunities() -> JSONResponse:
                     "url": opp.url,
                 }
             )
+
+    OPPS_CACHE.update(rows=rows, fetched_at=now)
+    return rows
+
+
+@app.get("/api/signals")
+async def get_signals(asset: str = "todos", timeframe: str = "todos") -> JSONResponse:
+    """What to do right now, ranked, with each signal's evidence attached.
+
+    Decision support only — nothing here places an order. `asset` and
+    `timeframe` mirror how the tab is actually used: pick the market you
+    are watching and the horizon you will hold, then read one list.
+    """
+    try:
+        opportunities = await scan_opportunities()
+    except Exception as exc:
+        log.warning("signals.opps_failed", error=str(exc)[:120])
+        opportunities = OPPS_CACHE["rows"]
+
+    desk = build_desk(
+        arb_events=STATE.get("arb_events", []),
+        markets=STATE.get("markets", []),
+        opportunities=opportunities,
+        scanner=STATE.get("scanner", []),
+        asset=asset,
+        timeframe=timeframe,
+    )
+
+    return JSONResponse(
+        {
+            "signals": desk.rows(),
+            "actionable": desk.actionable,
+            "sampling": desk.sampling,
+            "informational": desk.informational,
+            "scanned": desk.scanned,
+            "no_trade_reason": desk.no_trade_reason,
+            "assets": sorted({m.get("asset", "") for m in STATE.get("markets", [])} - {""}),
+            "timeframes": sorted({m.get("duration", "") for m in STATE.get("markets", [])} - {""}),
+        }
+    )
+
+
+@app.post("/api/signals/taken")
+async def post_signal_taken(payload: dict = Body(...)) -> JSONResponse:
+    """Record that the user executed a signal by hand.
+
+    The desk cannot see the user's broker, so the only way to learn
+    whether its advice was worth following is for the user to say they
+    followed it. Each entry is appended, never rewritten, so the record
+    cannot be tidied up after the fact.
+    """
+    entry = {
+        "ts": int(time.time() * 1000),
+        "source": str(payload.get("source", ""))[:60],
+        "asset": str(payload.get("asset", ""))[:20],
+        "action": str(payload.get("action", ""))[:200],
+        "confidence": str(payload.get("confidence", ""))[:20],
+        "edge": _as_float(payload.get("edge")) or 0.0,
+        "stake": _as_float(payload.get("stake")) or 0.0,
+    }
+
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with TAKEN_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        log.warning("signals.taken_write_failed", error=str(exc)[:120])
+        return JSONResponse({"error": "no se pudo guardar"}, status_code=500)
+
+    add_alert("info", f"SEÑAL TOMADA · {entry['action'][:60]}")
+    return JSONResponse({"ok": True, "entry": entry})
+
+
+@app.get("/api/signals/taken")
+async def get_signals_taken() -> JSONResponse:
+    """The log of signals the user said they acted on, newest first."""
+    rows: list[dict] = []
+    try:
+        if TAKEN_FILE.exists():
+            with TAKEN_FILE.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        continue
+    except OSError as exc:
+        log.warning("signals.taken_read_failed", error=str(exc)[:120])
+
+    rows.reverse()
+    by_tier: dict[str, int] = {}
+    for row in rows:
+        tier = row.get("confidence", "?")
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+
+    return JSONResponse({"taken": rows[:80], "total": len(rows), "by_tier": by_tier})
+
+
+@app.get("/api/opportunities")
+async def get_opportunities() -> JSONResponse:
+    """Every category strategy run over the current snapshot.
+
+    Opportunities are returned with their `kind` intact so the panel can
+    keep structural edges (arithmetic, tradeable) visually separate from
+    statistical ones (a measured but unconfirmed bias). Collapsing the two
+    into a single "edge" column is exactly how an unproven hypothesis
+    turns into a live position by accident.
+    """
+    try:
+        rows = list(await scan_opportunities())
+    except Exception as exc:
+        log.warning("opportunities.fetch_failed", error=str(exc)[:120])
+        return JSONResponse({"opportunities": [], "error": str(exc)[:120]})
 
     # Structural first: those are the ones worth acting on.
     rows.sort(key=lambda r: (not r["actionable"], -r["edge"]))

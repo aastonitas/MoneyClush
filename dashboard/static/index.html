@@ -372,6 +372,43 @@
   .sstat { display: flex; justify-content: space-between; padding: 3px 0; font-size: 11px; }
   .sstat span:first-child { color: var(--text-dim); }
 
+  /* ---------- trading signals ----------
+     The left border carries the confidence tier, so the difference
+     between "this is arithmetic" and "this is a hypothesis" is visible
+     before any text is read. */
+  .sig-card {
+    border: 1px solid var(--border); border-left-width: 3px;
+    padding: 9px 10px; margin-bottom: 8px;
+  }
+  .sig-card.alta { border-left-color: var(--green); }
+  .sig-card.baja { border-left-color: var(--amber); }
+  .sig-card.ninguna { border-left-color: var(--red); opacity: .72; }
+  .sig-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .sig-action { font-weight: 600; color: var(--text); flex: 1; min-width: 190px; }
+  .sig-tier {
+    font-size: 9px; letter-spacing: .08em; padding: 1px 6px;
+    border: 1px solid currentColor;
+  }
+  .sig-meta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px; font-size: 10px; }
+  .sig-why { color: var(--text-dim); font-size: 10px; margin-top: 5px; line-height: 1.5; }
+  .sig-ev { color: var(--text-dim); font-size: 9px; margin-top: 4px; line-height: 1.45; opacity: .85; }
+  .sig-btn {
+    font: inherit; font-size: 10px; letter-spacing: .06em; cursor: pointer;
+    background: transparent; color: var(--green);
+    border: 1px solid var(--green); padding: 3px 9px;
+  }
+  .sig-btn[disabled] { color: var(--text-dim); border-color: var(--line); cursor: default; }
+  /* A countdown under two minutes is the difference between a signal and
+     a souvenir, so it stops being decoration and starts blinking. */
+  .sig-urgent { color: var(--amber); animation: pulse 1.6s infinite; }
+  .sig-dead { color: var(--red); }
+  .no-trade {
+    border: 1px dashed var(--line); padding: 14px; color: var(--text-dim);
+    font-size: 11px; line-height: 1.6;
+  }
+  .no-trade b { color: var(--amber); display: block; margin-bottom: 5px;
+    letter-spacing: .08em; }
+
   /* ---------- scanner rows ---------- */
   .scan-row { border: 1px solid var(--border); padding: 8px; margin-bottom: 8px; }
   .scan-row .rt { display: flex; justify-content: space-between; margin-bottom: 4px; }
@@ -435,6 +472,7 @@
     <button class="tab" data-view="sports">DEPORTES</button>
     <button class="tab" data-view="trending">DESTACADOS</button>
     <button class="tab" data-view="kalshi">KALSHI</button>
+    <button class="tab" data-view="trading">TRADING</button>
   </div>
   <div class="spacer"></div>
   <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
@@ -814,6 +852,57 @@
     </div>
 </div>
 
+<!-- ============ VISTA TRADING ============ -->
+<div class="grid-stack" id="view-trading" style="display:none">
+    <div class="grid-stack-item" gs-id="trading-signals" gs-x="0" gs-y="0" gs-w="8" gs-h="13">
+      <div class="grid-stack-item-content panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">SEÑALES</span>
+        <i class="info" data-key="trading-signals">i</i>
+        <span class="badge" id="sig-count">—</span></div>
+      <div class="filters" id="sig-asset-filters"></div>
+      <div class="filters" id="sig-tf-filters"></div>
+      <div class="panel-body" id="sig-body" style="overflow-y:auto">
+        <div class="dim" style="padding:6px">analizando…</div>
+      </div>
+      </div>
+    </div>
+
+    <div class="grid-stack-item" gs-id="trading-how" gs-x="8" gs-y="0" gs-w="4" gs-h="6">
+      <div class="grid-stack-item-content panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">CÓMO FUNCIONA</span>
+        <i class="info" data-key="trading-how">i</i></div>
+      <div class="panel-body" style="font-size:11px; line-height:1.6">
+        <div class="sstat"><span>ejecución</span><b class="amber">MANUAL</b></div>
+        <div class="sstat"><span>órdenes automáticas</span><b class="down">NINGUNA</b></div>
+        <div class="sstat"><span>señales analizadas</span><b id="sig-scanned">—</b></div>
+        <div class="sstat"><span>edges aritméticos</span><b id="sig-actionable" class="up">—</b></div>
+        <div class="sstat"><span>apuestas de muestreo</span><b id="sig-sampling" class="amber">—</b></div>
+        <div class="dim" style="margin-top:10px">
+          El bot no abre posiciones: te dice qué haría y tú lo ejecutas en la casa.
+          Cada señal lleva <b>por qué</b> y <b>cuánto aguanta</b>.
+          <div style="margin-top:8px">
+            <b class="up">ALTA</b> — la ganancia es aritmética, no hay que acertar nada.<br>
+            <b class="amber">BAJA</b> — sesgo medido pero sin confirmar; $1 para seguir midiendo.<br>
+            <b class="down">NINGUNA</b> — el modelo discrepa del mercado. El backtest dice
+            que el modelo pierde. Se muestra como contexto, nunca como orden.
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div class="grid-stack-item" gs-id="trading-taken" gs-x="8" gs-y="6" gs-w="4" gs-h="7">
+      <div class="grid-stack-item-content panel grow">
+      <div class="panel-head"><span class="slash">//</span><span class="t">SEÑALES QUE TOMASTE</span>
+        <i class="info" data-key="trading-taken">i</i>
+        <span class="badge" id="taken-count">0</span></div>
+      <div class="panel-body" id="taken-body" style="overflow-y:auto">
+        <div class="dim">aún ninguna</div>
+      </div>
+      </div>
+    </div>
+</div>
+
 <div class="footer-note">
   datos: gamma-api.polymarket.com + clob.polymarket.com + api.elections.kalshi.com + okx/coinbase spot &middot; refresh 3s &middot; ejecución simulada (paper) — sin órdenes reales
 </div>
@@ -849,6 +938,9 @@ const INFO = {
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
   "kalshi-ladders": ["ESCALERAS DE STRIKES · KALSHI", "Kalshi no lista BTC como un solo Sí/No: lista una escalera de strikes sobre la misma hora ('por encima de $63.750', 'por encima de $64.000'...). Cada peldaño es un digital independiente con su propio libro. MID es el punto medio del libro; SPREAD es lo que separa la compra de la venta — en BTC suele ser de 12 a 29 céntimos, mucho más ancho que Polymarket. FEE es la comisión de ida y vuelta: Kalshi cobra 0,07 × P × (1−P) por contrato y Polymarket no cobra nada, así que un hueco de 2¢ que sería dinero gratis allí aquí es una pérdida. MODELO es nuestra Φ(distancia/σ restante) aplicada al strike, y DIF su distancia contra el mercado — se muestra como diagnóstico, no como señal: el backtest de 299 ventanas ya demostró que este modelo no bate al mercado."],
   "kalshi-arb": ["ARBITRAJE DE ESCALERA", "La oportunidad que solo existe en Kalshi, porque nace de listar muchos strikes sobre el mismo subyacente y la misma hora. 'BTC por encima de 63.000' no puede ser menos probable que 'BTC por encima de 64.000': todo mundo donde paga el strike alto paga también el bajo. Así que comprar el strike bajo y vender el alto da un pago de 1$ dentro de la banda y 0$ fuera — nunca negativo. Si además el ask del strike bajo está por DEBAJO del bid del alto, cobras por adelantado por sostener algo que nunca pierde: eso es arbitraje sin riesgo. La columna NETO ya descuenta la comisión de las dos patas. Que esté vacío es lo normal y lo honesto: significa que la escalera es internamente coherente ahora mismo."],
+  "trading-signals": ["SEÑALES", "El bot analiza los dos mercados y te dice qué haría. NO abre posiciones: la ejecución es tuya, en la casa correspondiente. Cada tarjeta lleva la instrucción concreta, cuánto pondría, por qué, y el tiempo que le queda a la ventana — una señal de BTC a 5 minutos caduca de verdad. Filtra por activo y por temporalidad igual que elegirías par y marco temporal antes de operar. Lo más importante es el color del borde izquierdo: verde ALTA es aritmética (una cesta que cuesta menos de lo que paga, o una escalera que se contradice) y no depende de acertar la dirección; ámbar BAJA es el sesgo del favorito, medido pero sin confirmar, con $1 solo para seguir acumulando muestra; rojo NINGUNA es el modelo discrepando del mercado, que se muestra como contexto y nunca como orden. Que no haya nada operable es lo normal, y cuando pasa el panel lo dice con palabras en vez de quedarse en blanco."],
+  "trading-how": ["CÓMO FUNCIONA", "Este bot es una herramienta de análisis, no un piloto automático. Su trabajo es quitarte la indecisión y el ruido emocional: mira los dos mercados a la vez, descarta lo que no aguanta un examen y te deja una lista corta y ordenada. Tú decides y ejecutas. La razón de que NO ejecute solo no es técnica sino de honestidad: de las cuatro fuentes de señal que vigila, solo dos son aritméticas; las otras dos dependen de hipótesis que este mismo proyecto todavía no ha confirmado, y automatizar una hipótesis es la forma más rápida de perder dinero con mucha convicción."],
+  "trading-taken": ["SEÑALES QUE TOMASTE", "El bot no puede ver tu cuenta, así que la única forma de saber si seguirlo sirvió de algo es que tú marques lo que ejecutaste. Cada entrada se añade al final del fichero y no se reescribe, así que el historial no se puede maquillar después. Con el tiempo esta lista responde la única pregunta que importa de una herramienta de recomendación: ¿ganaba dinero quien le hacía caso? Fíjate sobre todo en el desglose por nivel de confianza — si las señales ALTA aciertan y las BAJA no, eso confirma que la separación entre aritmética e hipótesis estaba bien hecha."],
   "kalshi-dist": ["DISTRIBUCIÓN IMPLÍCITA · BTC", "Lo único que una escalera de strikes puede decir y un Up/Down no. Cada peldaño cotiza 'BTC por encima de X', y dos peldaños consecutivos se diferencian exactamente en la probabilidad de acabar entre ellos — así que restarlos recupera la vista completa del mercado sobre dónde va a cerrar BTC, no solo si sube o baja. Las barras son esa distribución: altura = probabilidad de esa banda de precio. Las dos de los extremos son las colas (por debajo del strike más bajo y por encima del más alto), que se incluyen para que el total tenga sentido. La suma rara vez da 100% exacto porque se calcula sobre mids y los spreads de Kalshi son anchos. Una barra ROJA es una banda con probabilidad negativa: eso es matemáticamente imposible y significa que la escalera se está contradiciendo — el mismo fallo que detecta el panel de arbitraje, aquí visible de un vistazo."],
   "kalshi-opps": ["OPORTUNIDADES POR CATEGORÍA", "Las cuatro estrategias que no son BTC Up/Down, corriendo sobre el estado actual de los dos mercados. La columna TIPO es lo que de verdad importa. ESTRUCTURAL significa que la ganancia es aritmética y no depende de acertar nada: comprar todos los resultados de un partido por menos de $1, o explotar que una escalera de strikes se contradiga a sí misma. Son las únicas marcadas como accionables. ESTADÍSTICA significa que depende de un sesgo que medimos pero no confirmamos — el favorito sobrevalorado, con p=0.031 sobre 299 ventanas, que necesita ~1000 para concluir; se muestran para seguir midiendo, no para operar. Que la lista de estructurales esté vacía es lo habitual y es información: significa que ahora mismo ninguna casa se está contradiciendo."],
   "kalshi-venue": ["KALSHI vs POLYMARKET", "Las dos casas preguntan lo mismo pero NO liquidan con el mismo número: Kalshi usa el índice BRTI de CF Benchmarks y Polymarket usa Chainlink. Por eso una diferencia de precio entre ambas no es automáticamente arbitraje — parte es base entre índices, y esa parte no se cobra nunca. A eso hay que restarle la comisión de Kalshi, que Polymarket no tiene. Este panel muestra el hueco bruto y lo que queda después de comisiones, para no confundir las dos cosas."],
@@ -2233,6 +2325,170 @@ async function refreshOpportunities() {
   }
 }
 
+/* ---------------- trading desk ----------------
+   Decision support: the panel renders what to do, and a human executes
+   it elsewhere. Nothing in here sends an order. */
+let sigAsset = "todos", sigTf = "todos";
+let sigData = { signals: [] };
+const takenKeys = new Set();
+
+const TIER = {
+  alta:    ["ALTA",    "up"],
+  baja:    ["BAJA",    "amber"],
+  ninguna: ["NINGUNA", "down"],
+};
+
+function countdown(secs) {
+  if (secs == null) return `<span class="dim">sin caducidad</span>`;
+  if (secs <= 0) return `<span class="sig-dead">CADUCADA</span>`;
+  const m = Math.floor(secs / 60), s = Math.round(secs % 60);
+  const txt = m ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+  return `<span class="${secs < 120 ? "sig-urgent" : ""}">quedan ${txt}</span>`;
+}
+
+function signalKey(s) { return `${s.source}|${s.action}`; }
+
+function renderSignals(data) {
+  sigData = data;
+  const list = data.signals || [];
+  // Three separate numbers on purpose: folding the $1 sampling bets into
+  // an "operables" count would report a dozen unconfirmed guesses as a
+  // dozen profitable trades.
+  $("sig-count").textContent =
+    `${data.actionable} aritm · ${data.sampling} muestreo · ${data.informational} info`;
+  $("sig-scanned").textContent = data.scanned;
+  $("sig-actionable").textContent = data.actionable;
+  $("sig-sampling").textContent = data.sampling;
+
+  drawFilterRow("sig-asset-filters", ["todos"].concat(data.assets || []), sigAsset,
+                v => { sigAsset = v; refreshSignals(); });
+  drawFilterRow("sig-tf-filters", ["todos"].concat(data.timeframes || []), sigTf,
+                v => { sigTf = v; refreshSignals(); });
+
+  const cards = list.map(s => {
+    const [tierLabel, tierCls] = TIER[s.confidence] || ["—", "dim"];
+    const key = signalKey(s);
+    const already = takenKeys.has(key);
+    const link = s.url
+      ? `<a href="${s.url}" target="_blank" rel="noopener">abrir mercado</a>`
+      : "";
+
+    // Only a tradeable signal gets a button. Offering "I took it" on a
+    // NO OPERAR card would invite exactly the trade the card argues against.
+    const btn = s.tradeable
+      ? `<button class="sig-btn" data-sig="${encodeURIComponent(key)}" ${already ? "disabled" : ""}>
+           ${already ? "✓ REGISTRADA" : "LA TOMÉ"}
+         </button>`
+      : "";
+
+    return `<div class="sig-card ${s.confidence}">
+      <div class="sig-top">
+        <span class="sig-tier ${tierCls}">${tierLabel}</span>
+        <span class="sig-action">${s.action}</span>
+        ${btn}
+      </div>
+      <div class="sig-meta">
+        <span class="dim">${s.venue} · ${s.asset || "—"} · ${s.timeframe}</span>
+        <span class="${s.edge > 0 ? "up" : "dim"}">edge ${cents(s.edge)}</span>
+        <span class="dim">apuesta $${fmt(s.stake, 0)}</span>
+        ${countdown(s.seconds_left)}
+        ${link}
+      </div>
+      <div class="sig-why">${s.rationale}</div>
+      <div class="sig-ev">${s.evidence}</div>
+    </div>`;
+  }).join("");
+
+  const notice = data.no_trade_reason
+    ? `<div class="no-trade"><b>NO OPERAR</b>${data.no_trade_reason}</div>`
+    : "";
+
+  $("sig-body").innerHTML = (notice + cards) ||
+    '<div class="dim" style="padding:6px">sin señales</div>';
+
+  $("sig-body").querySelectorAll(".sig-btn").forEach(b => {
+    b.addEventListener("click", () => markTaken(decodeURIComponent(b.dataset.sig), b));
+  });
+}
+
+function drawFilterRow(id, values, active, onPick) {
+  const host = $(id);
+  host.innerHTML = values.map(v =>
+    `<button class="filt ${v === active ? "on" : ""}" data-v="${v}">${v.toUpperCase()}</button>`
+  ).join("");
+  host.querySelectorAll(".filt").forEach(b => {
+    b.addEventListener("click", () => onPick(b.dataset.v));
+  });
+}
+
+async function markTaken(key, btn) {
+  const signal = (sigData.signals || []).find(s => signalKey(s) === key);
+  if (!signal) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    await fetch("/api/signals/taken", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: signal.source, asset: signal.asset, action: signal.action,
+        confidence: signal.confidence, edge: signal.edge, stake: signal.stake,
+      }),
+    });
+    takenKeys.add(key);
+    btn.textContent = "✓ REGISTRADA";
+    refreshTaken();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "REINTENTAR";
+  }
+}
+
+function renderTaken(data) {
+  const rows = data.taken || [];
+  $("taken-count").textContent = data.total || 0;
+
+  if (!rows.length) {
+    $("taken-body").innerHTML =
+      `<div class="dim">Aún ninguna. Cuando ejecutes una señal, márcala aquí:
+       es la única forma de saber después si hacerle caso al bot salía a cuenta.</div>`;
+    return;
+  }
+
+  const tiers = Object.entries(data.by_tier || {})
+    .map(([t, n]) => `<div class="sstat"><span>${t}</span><b>${n}</b></div>`).join("");
+
+  $("taken-body").innerHTML = tiers + rows.map(r => {
+    const when = new Date(r.ts).toLocaleString("es-ES",
+      { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    const [, cls] = TIER[r.confidence] || ["", "dim"];
+    return `<div style="border-bottom:1px solid rgba(22,38,29,.5); padding:5px 0">
+      <div style="display:flex; gap:8px; justify-content:space-between">
+        <span style="font-size:10px">${r.action}</span>
+        <b class="${cls}" style="font-size:9px">${(r.confidence || "").toUpperCase()}</b>
+      </div>
+      <div class="dim" style="font-size:9px">${when} · edge ${cents(r.edge)} · $${fmt(r.stake, 0)}</div>
+    </div>`;
+  }).join("");
+}
+
+async function refreshSignals() {
+  if (currentView !== "trading") return;
+  try {
+    const r = await fetch(`/api/signals?asset=${encodeURIComponent(sigAsset)}&timeframe=${encodeURIComponent(sigTf)}`);
+    renderSignals(await r.json());
+  } catch (e) {
+    $("sig-body").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
+  }
+}
+
+async function refreshTaken() {
+  try {
+    const r = await fetch("/api/signals/taken");
+    renderTaken(await r.json());
+  } catch (e) { /* the ledger is not worth an error banner */ }
+}
+
 document.querySelectorAll("#sports-filters .filt").forEach(btn => {
   btn.addEventListener("click", () => {
     sportsFilter = btn.dataset.f;
@@ -2251,7 +2507,7 @@ document.querySelectorAll("#trending-filters .filt").forEach(btn => {
   });
 });
 
-const VIEWS = ["crypto", "sports", "trending", "kalshi"];
+const VIEWS = ["crypto", "sports", "trending", "kalshi", "trading"];
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     currentView = btn.dataset.view;
@@ -2267,6 +2523,7 @@ document.querySelectorAll(".tab").forEach(btn => {
       refreshTrendSim();
     }
     if (currentView === "kalshi") { refreshKalshi(); refreshOpportunities(); }
+    if (currentView === "trading") { refreshSignals(); refreshTaken(); }
   });
 });
 
@@ -2295,6 +2552,9 @@ setInterval(refreshPredictions, 30000);
 setInterval(refreshStandings, 600000);
 setInterval(refreshKalshi, 45000);
 setInterval(refreshOpportunities, 60000);
+// Faster than the other tabs on purpose: a five-minute BTC window can
+// open and close between two slower ticks.
+setInterval(refreshSignals, 5000);
 
 document.querySelectorAll("#pred-log-filters .filt").forEach(btn => {
   btn.addEventListener("click", () => {
