@@ -15,6 +15,11 @@ venv/
 # -shm files are worse, being a half-applied transaction log.
 data/paper_metrics.jsonl
 data/predictions.jsonl
+data/signals_taken.jsonl
+
+# Re-downloadable probe cache. scripts/probe_1min.py refetches it when
+# absent, so committing half a megabyte of candles buys nothing.
+data/history/btc_1m_probe.json
 data/*.db
 data/*.db-wal
 data/*.db-shm
