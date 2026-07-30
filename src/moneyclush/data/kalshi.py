@@ -234,6 +234,53 @@ class LadderGroup:
             out.append((m, here - above))
         return out
 
+    def distribution_bands(self) -> list[dict]:
+        """The implied distribution as plottable bands, including the tails.
+
+        Two bands exist that no single rung represents: everything below
+        the lowest strike, and everything above the highest. Leaving them
+        out draws a histogram that does not sum to 1 and quietly hides
+        where most of the probability often sits — on a ladder whose
+        strikes all sit under spot, the entire upper tail is the story.
+        """
+        rungs = sorted(
+            (m for m in self.markets if m.tradeable and m.strike is not None),
+            key=lambda m: m.strike,
+        )
+        if not rungs:
+            return []
+
+        bands: list[dict] = [
+            {
+                "label": f"< {rungs[0].strike:,.0f}",
+                "low": None,
+                "high": rungs[0].strike,
+                "prob": max(0.0, 1.0 - (rungs[0].mid or 0.0)),
+            }
+        ]
+
+        for i, m in enumerate(rungs[:-1]):
+            nxt = rungs[i + 1]
+            bands.append(
+                {
+                    "label": f"{m.strike:,.0f}–{nxt.strike:,.0f}",
+                    "low": m.strike,
+                    "high": nxt.strike,
+                    "prob": (m.mid or 0.0) - (nxt.mid or 0.0),
+                }
+            )
+
+        top = rungs[-1]
+        bands.append(
+            {
+                "label": f"> {top.strike:,.0f}",
+                "low": top.strike,
+                "high": None,
+                "prob": max(0.0, top.mid or 0.0),
+            }
+        )
+        return bands
+
 
 def ladder_arbitrages(group: LadderGroup, min_net: float = 0.005) -> list[LadderArb]:
     """Strike pairs whose quotes contradict each other, net of fees.
@@ -398,6 +445,10 @@ def to_rows(groups: list[LadderGroup], max_groups: int = 12) -> list[dict]:
                 "strikes": len(tradeable),
                 "arb_count": len(arbs),
                 "best_arb": round(arbs[0].net, 4) if arbs else None,
+                "distribution": [
+                    {"label": b["label"], "prob": round(b["prob"], 4)}
+                    for b in g.distribution_bands()
+                ],
                 "arbs": [
                     {
                         "label": a.label,

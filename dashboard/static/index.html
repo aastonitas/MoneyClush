@@ -69,6 +69,57 @@
   #push-btn.off { border-color: var(--line); color: var(--dim); }
   #push-btn.denied { border-color: var(--red); color: var(--red); cursor: not-allowed; }
 
+  /* Prices and diagnostics travel as units so a wrap never splits BTC from
+     ETH, or POLLS from WS. */
+  .hgroup { display: flex; align-items: center; gap: 16px; }
+  .hwhen { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+  #h-date { color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
+  #h-clock { color: var(--text); font-weight: 600; }
+
+  /* ---------- header on a phone ----------
+     The header is sticky, so every row it wraps to is a row stolen from
+     the panels underneath. Two things buy that space back: the tabs move
+     to their own full-width line where they can be thumbed through, and
+     the parts that exist for debugging rather than for trading drop out. */
+  @media (max-width: 860px) {
+    header { gap: 6px 10px; padding: 6px 8px; font-size: 10px; }
+    .logo { font-size: 12px; letter-spacing: .5px; }
+    .hgroup { gap: 10px; }
+    .spacer { display: none; }
+
+    /* Left in source order, the logo and the clock each claim a whole
+       wrapped line and leave two thirds of it empty. Pairing them on the
+       first line — clock pushed right by the auto margin — costs nothing
+       and gives a row back to the panels below. */
+    .logo { order: 1; }
+    .hwhen { order: 2; margin-left: auto; }
+    .hgroup { order: 3; }
+    #h-store { order: 4; }
+    #h-bot { order: 5; }
+    .hconn { order: 6; }
+    .mode-chip { order: 7; }
+    /* Qualified with `header` on purpose: the base `.tabs` rule is defined
+       further down the sheet, so an unqualified override here would lose
+       the margin-left tie-break to it and leave the row indented. */
+    header .tabs {
+      order: 8; width: 100%; margin-left: 0;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    header .tabs::-webkit-scrollbar { display: none; }
+    header .tab { flex: 1 0 auto; padding: 4px 9px; }
+    .mode-chip { padding: 1px 6px; font-size: 9px; letter-spacing: .5px; }
+    #h-bot-spark { width: 46px; }
+  }
+  @media (max-width: 560px) {
+    /* POLLS and WS are instrument readings for whoever is debugging the
+       feed. The storage warning stays: an ephemeral DB silently loses the
+       paper track, and that is worth a line even on a small screen. The
+       BOT sparkline stays too — it fits, and it is the one number that
+       says whether the thing is making or losing money. */
+    .hdiag { display: none; }
+  }
+
   /* ---------- layout ----------
      The grid fills whatever vertical space the header leaves. Columns
      stretch to equal height, and one panel per column is marked .grow so
@@ -369,29 +420,38 @@
 
 <header>
   <div class="logo">MONEYCLUSH<span>//</span>TERMINAL</div>
-  <div class="hstat">BTC <b id="h-btc">—</b></div>
-  <div class="hstat">ETH <b id="h-eth">—</b></div>
-  <div class="hstat">SOL <b id="h-sol">—</b></div>
-  <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
-  <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
+  <div class="hgroup">
+    <div class="hstat">BTC <b id="h-btc">—</b></div>
+    <div class="hstat">ETH <b id="h-eth">—</b></div>
+    <div class="hstat">SOL <b id="h-sol">—</b></div>
+  </div>
+  <div class="hgroup hdiag">
+    <div class="hstat">POLLS <b id="h-polls" class="amber">0</b></div>
+    <div class="hstat">WS <b id="h-ws" class="dim">—</b></div>
+  </div>
   <div class="hstat" id="h-store" style="display:none">DB <b class="down" id="h-store-val">EFÍMERA</b></div>
   <div class="tabs">
     <button class="tab active" data-view="crypto">CRYPTO</button>
     <button class="tab" data-view="sports">DEPORTES</button>
     <button class="tab" data-view="trending">DESTACADOS</button>
     <button class="tab" data-view="kalshi">KALSHI</button>
+  </div>
+  <div class="spacer"></div>
   <div class="hstat h-bot" id="h-bot" title="PnL combinado de las dos pistas automáticas: backing al favorito en BTC y en deportes">
     <span class="h-bot-label">BOT</span>
     <canvas id="h-bot-spark" width="70" height="16"></canvas>
     <b id="h-bot-pnl" class="dim">$0.00</b>
-  <div class="spacer"></div>
-  <div class="hstat"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
+  </div>
+  <div class="hstat hconn"><span class="live-dot"></span><span id="h-status">CONNECTING</span></div>
   <div class="mode-chip">PAPER MODE</div>
   <button class="mode-chip" id="push-btn" style="cursor:pointer; background:transparent; font:inherit"
     title="Notificaciones push: arbitraje, edge BTC, favoritos fuertes y avisos de almacenamiento">
     🔔 ALERTAS
   </button>
-  <div class="hstat" id="h-clock">--:--:--</div>
+  <div class="hwhen">
+    <span id="h-date">—</span>
+    <b id="h-clock">--:--:--</b>
+  </div>
 </header>
 
 <div class="grid-stack" id="view-crypto">
@@ -722,6 +782,18 @@
       </div>
     </div>
 
+    <div class="grid-stack-item" gs-id="kalshi-dist" gs-x="0" gs-y="20" gs-w="12" gs-h="7">
+      <div class="grid-stack-item-content panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">DISTRIBUCIÓN IMPLÍCITA · BTC</span>
+        <i class="info" data-key="kalshi-dist">i</i>
+        <span class="badge" id="dist-badge">—</span></div>
+      <div class="panel-body">
+        <canvas id="kalshi-dist-chart"></canvas>
+        <div class="dim" id="dist-note" style="font-size:10px; margin-top:6px"></div>
+      </div>
+      </div>
+    </div>
+
     <div class="grid-stack-item" gs-id="kalshi-opps" gs-x="0" gs-y="13" gs-w="12" gs-h="7">
       <div class="grid-stack-item-content panel grow">
       <div class="panel-head"><span class="slash">//</span><span class="t">OPORTUNIDADES POR CATEGORÍA</span>
@@ -777,6 +849,7 @@ const INFO = {
   trades: ["PAPER TRADE LOG", "Fills simulados de la estrategia de arbitraje temporal: compra el lado barato (< 48¢) e intenta emparejar el otro lado después para asegurar coste combinado < $1. Ejecuta contra la profundidad real del libro (precio VWAP)."],
   "kalshi-ladders": ["ESCALERAS DE STRIKES · KALSHI", "Kalshi no lista BTC como un solo Sí/No: lista una escalera de strikes sobre la misma hora ('por encima de $63.750', 'por encima de $64.000'...). Cada peldaño es un digital independiente con su propio libro. MID es el punto medio del libro; SPREAD es lo que separa la compra de la venta — en BTC suele ser de 12 a 29 céntimos, mucho más ancho que Polymarket. FEE es la comisión de ida y vuelta: Kalshi cobra 0,07 × P × (1−P) por contrato y Polymarket no cobra nada, así que un hueco de 2¢ que sería dinero gratis allí aquí es una pérdida. MODELO es nuestra Φ(distancia/σ restante) aplicada al strike, y DIF su distancia contra el mercado — se muestra como diagnóstico, no como señal: el backtest de 299 ventanas ya demostró que este modelo no bate al mercado."],
   "kalshi-arb": ["ARBITRAJE DE ESCALERA", "La oportunidad que solo existe en Kalshi, porque nace de listar muchos strikes sobre el mismo subyacente y la misma hora. 'BTC por encima de 63.000' no puede ser menos probable que 'BTC por encima de 64.000': todo mundo donde paga el strike alto paga también el bajo. Así que comprar el strike bajo y vender el alto da un pago de 1$ dentro de la banda y 0$ fuera — nunca negativo. Si además el ask del strike bajo está por DEBAJO del bid del alto, cobras por adelantado por sostener algo que nunca pierde: eso es arbitraje sin riesgo. La columna NETO ya descuenta la comisión de las dos patas. Que esté vacío es lo normal y lo honesto: significa que la escalera es internamente coherente ahora mismo."],
+  "kalshi-dist": ["DISTRIBUCIÓN IMPLÍCITA · BTC", "Lo único que una escalera de strikes puede decir y un Up/Down no. Cada peldaño cotiza 'BTC por encima de X', y dos peldaños consecutivos se diferencian exactamente en la probabilidad de acabar entre ellos — así que restarlos recupera la vista completa del mercado sobre dónde va a cerrar BTC, no solo si sube o baja. Las barras son esa distribución: altura = probabilidad de esa banda de precio. Las dos de los extremos son las colas (por debajo del strike más bajo y por encima del más alto), que se incluyen para que el total tenga sentido. La suma rara vez da 100% exacto porque se calcula sobre mids y los spreads de Kalshi son anchos. Una barra ROJA es una banda con probabilidad negativa: eso es matemáticamente imposible y significa que la escalera se está contradiciendo — el mismo fallo que detecta el panel de arbitraje, aquí visible de un vistazo."],
   "kalshi-opps": ["OPORTUNIDADES POR CATEGORÍA", "Las cuatro estrategias que no son BTC Up/Down, corriendo sobre el estado actual de los dos mercados. La columna TIPO es lo que de verdad importa. ESTRUCTURAL significa que la ganancia es aritmética y no depende de acertar nada: comprar todos los resultados de un partido por menos de $1, o explotar que una escalera de strikes se contradiga a sí misma. Son las únicas marcadas como accionables. ESTADÍSTICA significa que depende de un sesgo que medimos pero no confirmamos — el favorito sobrevalorado, con p=0.031 sobre 299 ventanas, que necesita ~1000 para concluir; se muestran para seguir midiendo, no para operar. Que la lista de estructurales esté vacía es lo habitual y es información: significa que ahora mismo ninguna casa se está contradiciendo."],
   "kalshi-venue": ["KALSHI vs POLYMARKET", "Las dos casas preguntan lo mismo pero NO liquidan con el mismo número: Kalshi usa el índice BRTI de CF Benchmarks y Polymarket usa Chainlink. Por eso una diferencia de precio entre ambas no es automáticamente arbitraje — parte es base entre índices, y esa parte no se cobra nunca. A eso hay que restarle la comisión de Kalshi, que Polymarket no tiene. Este panel muestra el hueco bruto y lo que queda después de comisiones, para no confundir las dos cosas."],
   "trend-sim": ["SIMULADOR FAVORITOS · DESTACADOS", "Posiciones de $1 sobre sucesos destacados, entrando solo a favoritos de 75¢ o más — la banda donde el backtest encontró que el mercado los sobrevalora. A diferencia del resto del proyecto, aquí NO hay que esperar a la resolución: un mercado destacado puede tardar meses en cerrar, así que la posición se valora contra el precio actual y puedes VENDER cuando quieras. $1 a 80¢ compra 1.25 shares; si el precio sube a 88¢ vendes con +$0.10, y si aguantas hasta el final ganas +$0.25 o pierdes el dólar entero. Por eso las estadísticas separan AGUANTADAS de VENDIDAS: son dos preguntas distintas. Aguantar mide si el favorito acierta tanto como su precio promete. Vender mide si el precio sube después de entrar, acierte o no — un favorito que sube de 78¢ a 85¢ y luego pierde paga a quien vendió y arruina a quien aguantó."],
@@ -1995,11 +2068,117 @@ function renderKalshi(data) {
     : '<div class="dim">sin escalera de BTC abierta</div>';
 }
 
+/* ---------------- implied distribution ----------------
+   A ladder of "above X" digitals differences into a probability
+   distribution: consecutive rungs differ by exactly the chance of landing
+   between them. This is the one view Polymarket's single Up/Down binary
+   cannot produce, so it is what the chart shows — not a price history,
+   which would only restate the table above it. */
+function drawDistribution(canvas, bands) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width = canvas.offsetWidth * 2;
+  const h = canvas.height = 220;
+  ctx.clearRect(0, 0, w, h);
+  if (!bands.length) return;
+
+  const pad = { l: 8, r: 8, t: 14, b: 34 };
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+
+  // A negative band means the ladder is inverted there. Drawing it upward
+  // like any other bar would render an impossible probability as a normal
+  // one, so the axis floats: positives rise from it, negatives hang below
+  // it, and the inversion reads as the anomaly it is.
+  const probs = bands.map(b => b.prob);
+  const posPeak = Math.max(...probs, 0.05);
+  const negPeak = Math.max(0, -Math.min(...probs, 0));
+  const span = posPeak + negPeak;
+  const axisY = pad.t + plotH * (posPeak / span);
+  const slot = plotW / bands.length;
+  const barW = Math.max(2, slot * 0.72);
+
+  ctx.font = "18px ui-monospace, monospace";
+  ctx.textAlign = "center";
+
+  bands.forEach((b, i) => {
+    const cx = pad.l + slot * i + slot / 2;
+    const negative = b.prob < 0;
+    const barH = (Math.abs(b.prob) / span) * plotH;
+
+    ctx.fillStyle = negative ? "rgba(255,68,85,.85)" : "rgba(0,255,136,.55)";
+    ctx.fillRect(cx - barW / 2, negative ? axisY : axisY - barH, barW, barH);
+
+    if (Math.abs(b.prob) >= 0.04) {
+      ctx.fillStyle = negative ? "#ff4455" : "#00ff88";
+      ctx.fillText(Math.round(b.prob * 100) + "%", cx,
+                   negative ? axisY + barH + 16 : axisY - barH - 5);
+    }
+
+    // Only label every other band once they get tight, or they collide.
+    if (bands.length <= 9 || i % 2 === 0) {
+      ctx.save();
+      ctx.fillStyle = "#5a6e63";
+      ctx.translate(cx, pad.t + plotH + 14);
+      if (slot < 90) { ctx.rotate(-Math.PI / 5); ctx.textAlign = "right"; }
+      ctx.fillText(b.label, 0, 0);
+      ctx.restore();
+      ctx.textAlign = "center";
+    }
+  });
+
+  ctx.strokeStyle = "rgba(90,110,99,.4)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.l, axisY);
+  ctx.lineTo(w - pad.r, axisY);
+  ctx.stroke();
+}
+
+function renderDistribution(ladders) {
+  const btc = ladders.find(l => l.series === "KXBTCD" && (l.distribution || []).length);
+  const badge = $("dist-badge");
+  const note = $("dist-note");
+
+  if (!btc) {
+    badge.textContent = "—";
+    note.textContent = "sin escalera de BTC con cotizaciones en ambos lados.";
+    const c = $("kalshi-dist-chart");
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    return;
+  }
+
+  const bands = btc.distribution;
+  badge.textContent = `${bands.length} bandas · ${btc.minutes_left}min`;
+  drawDistribution($("kalshi-dist-chart"), bands);
+
+  const total = bands.reduce((s, b) => s + b.prob, 0);
+  const peak = bands.reduce((a, b) => b.prob > a.prob ? b : a, bands[0]);
+  const inverted = bands.filter(b => b.prob < 0).length;
+
+  // A negative band and a tradeable arbitrage are not the same thing, and
+  // saying so matters: this panel measures mids while the arb panel
+  // measures what you could actually cross. A ladder can be inverted at
+  // the midpoint and still have no arbitrage, because the spread swallows
+  // the inversion. Reporting both as "contradicts itself" would leave the
+  // two panels flatly disagreeing on screen.
+  note.innerHTML =
+    `Banda más probable <b>${peak.label}</b> al ${Math.round(peak.prob * 100)}%. ` +
+    `Suma ${Math.round(total * 100)}% — se calcula sobre mids, así que se aleja de 100% ` +
+    `cuando los spreads son anchos. ` +
+    (inverted
+      ? `<span class="amber">${inverted} banda(s) negativa(s)</span>: los mids se invierten,
+         pero eso solo es operable si además el ask del strike bajo cae por debajo del bid
+         del alto — mira el panel de arbitraje para saber si se puede cruzar.`
+      : `Ninguna banda negativa: los mids respetan la monotonía.`);
+}
+
 async function refreshKalshi() {
   if (currentView !== "kalshi") return;
   try {
     const r = await fetch("/api/kalshi");
-    renderKalshi(await r.json());
+    const data = await r.json();
+    renderKalshi(data);
+    renderDistribution(data.ladders || []);
   } catch (e) {
     $("kalshi-body").innerHTML = '<div class="dim" style="padding:6px">no se pudo cargar</div>';
   }
@@ -2091,7 +2270,18 @@ document.querySelectorAll(".tab").forEach(btn => {
   });
 });
 
-setInterval(() => { $("h-clock").textContent = new Date().toLocaleTimeString("es-ES"); }, 1000);
+/* The date matters more here than it looks: markets are named by their
+   settlement day ("Bitcoin price on Jul 30"), and reading one of those
+   next to a clock with no date is how you reason about the wrong window. */
+function tickClock() {
+  const now = new Date();
+  $("h-clock").textContent = now.toLocaleTimeString("es-ES");
+  $("h-date").textContent = now.toLocaleDateString("es-ES", {
+    weekday: "short", day: "2-digit", month: "short",
+  }).replace(/\./g, "");
+}
+tickClock();
+setInterval(tickClock, 1000);
 refresh();
 refreshNews("crypto", "news-crypto");
 refreshPredictions();
