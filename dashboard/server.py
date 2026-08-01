@@ -67,6 +67,7 @@ from moneyclush.strategies.categories import (
 )
 from moneyclush.strategies.temporal_arbitrage import TemporalArbitrageStrategy
 from moneyclush.execution.guardrails import (
+    ARM_DURATION_SECONDS,
     KillSwitch,
     SafetyLimits,
     compute_max_exposure_usd,
@@ -1298,6 +1299,50 @@ def guardrails_payload() -> dict:
 async def get_state() -> JSONResponse:
     STATE["guardrails"] = guardrails_payload()
     return JSONResponse(STATE)
+
+
+@app.post("/api/arm")
+async def arm_trading(payload: dict = Body(default={})) -> JSONResponse:
+    """Arm live order placement, for a bounded window.
+
+    This is the switch that lets real money move, so it refuses to be
+    thrown on autopilot: it will not arm while the emergency stop is
+    engaged (clear that first, deliberately, as its own act), and it will
+    not arm without a readable on-chain balance, since every size and
+    exposure limit downstream is a fraction of that number.
+    """
+    if kill_switch.is_killed():
+        return JSONResponse(
+            {**guardrails_payload(),
+             "error": "parada de emergencia activa — libérala primero"},
+            status_code=409,
+        )
+    if STATE.get("polymarket_balance") is None:
+        return JSONResponse(
+            {**guardrails_payload(),
+             "error": "sin saldo on-chain legible — no se arma a ciegas"},
+            status_code=409,
+        )
+
+    duration = float(payload.get("duration_seconds") or ARM_DURATION_SECONDS)
+    expires_at = kill_switch.arm(duration_seconds=duration)
+    until = time.strftime("%H:%M:%S", time.localtime(expires_at))
+    add_alert("warn", f"TRADING ARMADO — órdenes reales habilitadas hasta {until}")
+    log.warning("guardrails.armed", until=until, duration_seconds=duration)
+    notify_push(
+        "MoneyClush: trading ARMADO",
+        f"Órdenes reales habilitadas hasta {until}. Se desarma solo.",
+        tag="trading-armed",
+    )
+    return JSONResponse(guardrails_payload())
+
+
+@app.post("/api/disarm")
+async def disarm_trading() -> JSONResponse:
+    kill_switch.disarm()
+    add_alert("info", "Trading desarmado — vuelta a solo observación")
+    log.warning("guardrails.disarmed")
+    return JSONResponse(guardrails_payload())
 
 
 @app.post("/api/emergency-stop")

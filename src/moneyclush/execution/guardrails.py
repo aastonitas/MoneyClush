@@ -36,6 +36,11 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 ARMED_FILE = DATA_DIR / "TRADING_ARMED"
 KILL_FILE = DATA_DIR / "KILL_SWITCH"
 
+# Arming lapses after this long. Long enough to cover a watched session,
+# short enough that walking away and forgetting is self-correcting rather
+# than open-ended.
+ARM_DURATION_SECONDS = 2 * 60 * 60
+
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -127,8 +132,34 @@ class KillSwitch:
     def is_killed(self) -> bool:
         return self.kill_file.exists()
 
+    def armed_expires_at(self) -> float | None:
+        """Epoch seconds when the current arming lapses, or None if not
+        armed. Unparseable contents count as expired, not as armed —
+        a corrupt or hand-edited marker must never read as "go".
+        """
+        try:
+            return float(self.armed_file.read_text().strip().split()[0])
+        except (OSError, ValueError, IndexError):
+            return None
+
     def is_armed(self) -> bool:
-        return self.armed_file.exists() and not self.is_killed()
+        """Arming lapses on its own.
+
+        A marker that stays "on" until someone remembers to switch it off
+        is the wrong default for something that spends real money: the
+        failure mode of forgetting is unbounded. Expiry makes the safe
+        state the one you drift into, not the one you must maintain.
+        """
+        if self.is_killed():
+            return False
+        expires_at = self.armed_expires_at()
+        return expires_at is not None and time.time() < expires_at
+
+    def armed_seconds_left(self) -> float:
+        expires_at = self.armed_expires_at()
+        if expires_at is None:
+            return 0.0
+        return max(0.0, expires_at - time.time())
 
     def trigger_stop(self, reason: str = "") -> None:
         """The emergency stop. Idempotent, and always safe to call."""
@@ -144,9 +175,20 @@ class KillSwitch:
         """
         self.kill_file.unlink(missing_ok=True)
 
-    def arm(self) -> None:
+    def arm(self, duration_seconds: float = ARM_DURATION_SECONDS) -> float:
+        """Arm live trading until `duration_seconds` from now.
+
+        Returns the expiry epoch. Writes the expiry first and the
+        human-readable stamp second, so a partially-written file still
+        parses to a bounded time rather than to "armed forever".
+        """
+        expires_at = time.time() + duration_seconds
         self.armed_file.parent.mkdir(parents=True, exist_ok=True)
-        self.armed_file.write_text(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+        self.armed_file.write_text(
+            f"{expires_at:.0f} armed_until="
+            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expires_at))}\n"
+        )
+        return expires_at
 
     def disarm(self) -> None:
         self.armed_file.unlink(missing_ok=True)
@@ -155,6 +197,7 @@ class KillSwitch:
         return {
             "armed": self.is_armed(),
             "killed": self.is_killed(),
+            "armed_seconds_left": round(self.armed_seconds_left()),
             # Live orders happen only when armed and not killed. Spelling
             # this out as its own field means the dashboard never has to
             # re-derive the boolean logic and risk getting it backwards.

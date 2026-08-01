@@ -479,6 +479,23 @@
   }
   .gr-resume-btn:hover { color: var(--text); border-color: var(--text-dim); }
   .gr-resume-btn:disabled { opacity: .3; cursor: default; }
+  .gr-arm-btn {
+    display: block; width: 100%;
+    background: rgba(255,176,0,.10); color: var(--amber);
+    border: 1px solid var(--amber); border-radius: 3px;
+    font-family: var(--mono); font-weight: 700; font-size: 12px;
+    letter-spacing: .04em; padding: 11px 10px; cursor: pointer;
+  }
+  .gr-arm-btn:hover { background: rgba(255,176,0,.2); }
+  .gr-arm-btn:disabled { opacity: .4; cursor: default; }
+  .gr-arm-btn.armed {
+    background: rgba(0,255,136,.12); color: var(--green);
+    border-color: var(--green);
+  }
+  .gr-countdown {
+    margin-top: 6px; text-align: center;
+    font-size: 11px; color: var(--green); letter-spacing: .04em;
+  }
   canvas { width: 100%; height: 110px; display: block; }
 
   .panel.collapsed .panel-body,
@@ -987,7 +1004,9 @@
         <div class="gr-row">
           <div class="gr-limits" id="gr-limits"></div>
           <div class="gr-controls">
-            <button id="gr-stop-btn" class="gr-stop-btn">■ PARADA DE EMERGENCIA</button>
+            <button id="gr-arm-btn" class="gr-arm-btn">▶ ARMAR TRADING REAL</button>
+            <div id="gr-arm-countdown" class="gr-countdown" style="display:none"></div>
+            <button id="gr-stop-btn" class="gr-stop-btn" style="margin-top:10px">■ PARADA DE EMERGENCIA</button>
             <button id="gr-resume-btn" class="gr-resume-btn">reanudar</button>
             <div class="dim" id="gr-note" style="margin-top:8px; font-size:11px; line-height:1.5"></div>
           </div>
@@ -1033,7 +1052,7 @@ const INFO = {
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "Dos pistas de paper trading en BTC. El arbitraje Up+Down exige que el par cueste ≤96¢ para operar — normalmente cotiza sobre 100¢, así que su curva está plana a propósito, no por fallo. La curva que se mueve es 'backing al favorito': $1 por ventana al lado que el mercado cotiza más caro, entrado pasado el 40% de la ventana. Debajo, calibración por banda de precio — el mismo desglose que en deportes, para ver si el sesgo del favorito aparece también aquí."],
   shadow: ["ÓRDENES SOMBRA", "Cada vez que la estrategia de arbitraje temporal genera una señal real (edge > 0, sobre datos que pasan el chequeo de dispersión entre exchanges), el sistema construye y firma una orden real contra tu wallet — EIP-712, contra el exchange V2, exactamente como se probó el 2026-08-01 — y la pasa por los guardarraíles. 'PASARÍA' dice si esa orden habría sido aceptada (saldo suficiente, dentro del 25%/50%, armado, etc.); casi siempre dirá que no, porque el sistema sigue sin armar a propósito. 'ENVIADA' es literal: execution/live_order.py llama a post_order solo cuando PASARÍA es SÍ — hoy eso nunca ocurre porque nada está armado. Nada en este dashboard crea data/TRADING_ARMED por su cuenta; armar es un acto tuyo, deliberado, fuera de esta pantalla."],
-  guardrails: ["GUARDARRAÍLES", "Los límites y el candado que cualquier orden real tendría que pasar antes de enviarse. El tamaño por orden y la exposición máxima son un % del saldo real on-chain, no un monto fijo — crecen si la cuenta crece y, sobre todo, se encogen solos después de una pérdida, sin que nadie tenga que bajarlos a mano. El 'techo absoluto' es un tope de seguridad aparte, por si el saldo se lee mal o la cuenta crece mucho. Hoy no hay ningún motor que coloque órdenes reales — nada aquí bloquea nada porque no hay nada que bloquear — pero el candado ya funciona: apretar PARADA DE EMERGENCIA crea data/KILL_SWITCH, que un futuro motor debe revisar antes de cada orden. Por defecto, cualquier arranque nuevo queda sin armar (NO ARMADO): armar el envío de órdenes reales es una acción explícita separada que todavía no existe en el dashboard, a propósito — se añade junto con el motor que realmente las envíe."],
+  guardrails: ["GUARDARRAÍLES", "Los límites y el candado que toda orden real debe pasar antes de enviarse. El tamaño por orden y la exposición máxima son un % del saldo real on-chain, no un monto fijo — crecen si la cuenta crece y, sobre todo, se encogen solos después de una pérdida, sin que nadie tenga que bajarlos a mano. El 'techo absoluto' es un tope aparte, por si el saldo se lee mal. ARMAR TRADING REAL es el único control aquí que permite que el dinero se mueva: al pulsarlo, el bot puede colocar órdenes por su cuenta sin preguntarte cada vez. Tiene tres protecciones: se desarma solo a las 2 horas (olvidarse no deja el bot corriendo indefinidamente), no arma si la parada de emergencia está activa, y no arma si no puede leer tu saldo on-chain (porque todos los límites son un % de ese número). PARADA DE EMERGENCIA gana siempre sobre el armado. Cualquier arranque nuevo del servidor queda NO ARMADO."],
   "trading-pair": ["PAR EN VIVO · UP + DOWN", "Une el libro de ambos lados de BTC (5m y 15m) en una sola lectura: PAR TOMADOR es best_ask_up + best_ask_down, el coste real de comprar ambos lados ahora mismo — por debajo de 100¢ es arbitraje sin importar quién gane. PAR MAKER es best_bid_up + best_bid_down: lo que costaría si dos órdenes límite tuyas, una en cada lado, se llenaran ambas — la métrica que le importaría a un motor de market making de dos lados (como el de la captura SIR-UPALOT), que hoy no existe aquí. 'mejor par visto' y 'umbral operable' vienen del mismo gate que decide cuándo se registra un arbitraje en la pestaña CRYPTO."],
   balance: ["SALDO POLYMARKET", "Tu saldo real en pUSD (Polymarket USD), leído directo de Polygon cada 30s — no el PnL de paper trading. Se usa lectura on-chain en vez del endpoint /balance-allowance del CLOB porque ese endpoint reporta 0 para esta cuenta pese a que la wallet sí tiene pUSD y allowance aprobada a los contratos V2 (ver el roadmap en execution/engine.py). Sin dirección configurada en POLYMARKET_FUNDER_ADDRESS, el panel queda vacío."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
@@ -2714,14 +2733,60 @@ function renderGuardrails(gr) {
   $("gr-stop-btn").disabled = killed;
   $("gr-resume-btn").disabled = !killed;
 
+  const armBtn = $("gr-arm-btn");
+  const countdown = $("gr-arm-countdown");
+  armBtn.className = "gr-arm-btn" + (armed ? " armed" : "");
+  armBtn.textContent = armed ? "■ DESARMAR" : "▶ ARMAR TRADING REAL";
+  armBtn.disabled = killed || (!armed && orderNow == null);
+
+  if (armed) {
+    const left = gr.armed_seconds_left || 0;
+    const m = Math.floor(left / 60), s = Math.round(left % 60);
+    countdown.style.display = "";
+    countdown.textContent = `se desarma solo en ${m}m ${String(s).padStart(2, "0")}s`;
+  } else {
+    countdown.style.display = "none";
+  }
+
   $("gr-note").innerHTML = killed
-    ? `<span class="down">Parada de emergencia activa.</span> Ningún motor futuro enviará órdenes reales mientras data/KILL_SWITCH exista.`
+    ? `<span class="down">Parada de emergencia activa.</span> No se puede armar mientras exista data/KILL_SWITCH — libérala primero.`
     : (armed
-        ? `Órdenes reales permitidas si todo lo demás se cumple: <b class="${live ? "up" : "dim"}">${live ? "SÍ" : "NO"}</b>`
-        : `Sin armar — no existe todavía forma de armar el envío de órdenes reales desde el dashboard, a propósito. Nada de esto bloquea nada hoy porque no hay ningún motor que coloque órdenes.`);
+        ? `<span class="up">ARMADO — el bot puede enviar órdenes reales.</span> Cada orden todavía debe pasar todos los límites de arriba: ${live ? "" : "ahora mismo algo más lo impide."}`
+        : (orderNow == null
+            ? `Sin saldo on-chain legible — no se arma a ciegas, porque todos los límites son un % de ese número.`
+            : `Sin armar. Al armar, el bot podrá colocar órdenes reales de hasta $${fmt(orderNow, 2)} por su cuenta, sin preguntarte cada vez.`));
 }
 
 async function initGuardrails() {
+  $("gr-arm-btn").addEventListener("click", async () => {
+    const btn = $("gr-arm-btn");
+    const isArmed = btn.classList.contains("armed");
+
+    if (!isArmed) {
+      // The one action in this dashboard that lets money move without a
+      // further human step, so the confirmation spells out the size and
+      // the fact that it is unattended — not a generic "are you sure?".
+      const size = $("gr-limits").querySelector("b")?.textContent || "?";
+      const ok = confirm(
+        "ARMAR TRADING REAL\n\n" +
+        "A partir de ahora el bot podrá colocar órdenes REALES por su cuenta, " +
+        "con tu dinero, sin preguntarte cada vez.\n\n" +
+        "Tamaño por orden: " + size + "\n" +
+        "Se desarma solo en 2 horas.\n\n" +
+        "¿Continuar?"
+      );
+      if (!ok) return;
+    }
+
+    btn.disabled = true;
+    try {
+      const r = await fetch(isArmed ? "/api/disarm" : "/api/arm", { method: "POST" });
+      const data = await r.json();
+      if (data.error) alert("No se pudo armar: " + data.error);
+      renderGuardrails(data);
+    } catch (e) { btn.disabled = false; }
+  });
+
   $("gr-stop-btn").addEventListener("click", async () => {
     if (!confirm("¿Activar la parada de emergencia? Ningún motor futuro podrá enviar órdenes reales hasta que se libere manualmente.")) return;
     $("gr-stop-btn").disabled = true;
