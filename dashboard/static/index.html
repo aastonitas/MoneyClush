@@ -1004,8 +1004,8 @@
       <div class="panel-body" style="overflow-y:auto">
         <div class="scan-detail" id="shadow-stats" style="margin-bottom:8px"></div>
         <table>
-          <thead><tr><th>HORA</th><th>MERCADO</th><th>PRECIO</th><th>SHARES</th><th>COSTE</th><th>PASARÍA</th><th>POR QUÉ</th></tr></thead>
-          <tbody id="shadow-body"><tr><td colspan="7" class="dim">esperando la primera señal…</td></tr></tbody>
+          <thead><tr><th>HORA</th><th>MERCADO</th><th>PRECIO</th><th>SHARES</th><th>COSTE</th><th>PASARÍA</th><th>ENVIADA</th><th>POR QUÉ</th></tr></thead>
+          <tbody id="shadow-body"><tr><td colspan="8" class="dim">esperando la primera señal…</td></tr></tbody>
         </table>
       </div>
       </div>
@@ -1032,7 +1032,7 @@ const INFO = {
   positions: ["PAPER POSITIONS", "Inventario simulado por mercado. UP/DOWN muestra shares y coste medio. Las shares emparejadas (mismo número de Up y Down) pagan $1 seguro al resolver; el exceso es exposición direccional. INV = capital invertido."],
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "Dos pistas de paper trading en BTC. El arbitraje Up+Down exige que el par cueste ≤96¢ para operar — normalmente cotiza sobre 100¢, así que su curva está plana a propósito, no por fallo. La curva que se mueve es 'backing al favorito': $1 por ventana al lado que el mercado cotiza más caro, entrado pasado el 40% de la ventana. Debajo, calibración por banda de precio — el mismo desglose que en deportes, para ver si el sesgo del favorito aparece también aquí."],
-  shadow: ["ÓRDENES SOMBRA", "Cada vez que la estrategia de arbitraje temporal genera una señal real (edge > 0, sobre datos que pasan el chequeo de dispersión entre exchanges), el sistema construye y firma una orden real contra tu wallet — EIP-712, contra el exchange V2, exactamente como se probó el 2026-08-01 — y la pasa por los guardarraíles. 'PASARÍA' dice si esa orden habría sido aceptada (saldo suficiente, dentro del 25%/50%, armado, etc.); casi siempre dirá que no, porque el sistema sigue sin armar a propósito. La orden firmada nunca se envía a Polymarket — ninguna función de este módulo llama a post_order. Es la forma de ver la tubería completa funcionando contra el mercado real antes de decidir si algún día se arma de verdad."],
+  shadow: ["ÓRDENES SOMBRA", "Cada vez que la estrategia de arbitraje temporal genera una señal real (edge > 0, sobre datos que pasan el chequeo de dispersión entre exchanges), el sistema construye y firma una orden real contra tu wallet — EIP-712, contra el exchange V2, exactamente como se probó el 2026-08-01 — y la pasa por los guardarraíles. 'PASARÍA' dice si esa orden habría sido aceptada (saldo suficiente, dentro del 25%/50%, armado, etc.); casi siempre dirá que no, porque el sistema sigue sin armar a propósito. 'ENVIADA' es literal: execution/live_order.py llama a post_order solo cuando PASARÍA es SÍ — hoy eso nunca ocurre porque nada está armado. Nada en este dashboard crea data/TRADING_ARMED por su cuenta; armar es un acto tuyo, deliberado, fuera de esta pantalla."],
   guardrails: ["GUARDARRAÍLES", "Los límites y el candado que cualquier orden real tendría que pasar antes de enviarse. El tamaño por orden y la exposición máxima son un % del saldo real on-chain, no un monto fijo — crecen si la cuenta crece y, sobre todo, se encogen solos después de una pérdida, sin que nadie tenga que bajarlos a mano. El 'techo absoluto' es un tope de seguridad aparte, por si el saldo se lee mal o la cuenta crece mucho. Hoy no hay ningún motor que coloque órdenes reales — nada aquí bloquea nada porque no hay nada que bloquear — pero el candado ya funciona: apretar PARADA DE EMERGENCIA crea data/KILL_SWITCH, que un futuro motor debe revisar antes de cada orden. Por defecto, cualquier arranque nuevo queda sin armar (NO ARMADO): armar el envío de órdenes reales es una acción explícita separada que todavía no existe en el dashboard, a propósito — se añade junto con el motor que realmente las envíe."],
   "trading-pair": ["PAR EN VIVO · UP + DOWN", "Une el libro de ambos lados de BTC (5m y 15m) en una sola lectura: PAR TOMADOR es best_ask_up + best_ask_down, el coste real de comprar ambos lados ahora mismo — por debajo de 100¢ es arbitraje sin importar quién gane. PAR MAKER es best_bid_up + best_bid_down: lo que costaría si dos órdenes límite tuyas, una en cada lado, se llenaran ambas — la métrica que le importaría a un motor de market making de dos lados (como el de la captura SIR-UPALOT), que hoy no existe aquí. 'mejor par visto' y 'umbral operable' vienen del mismo gate que decide cuándo se registra un arbitraje en la pestaña CRYPTO."],
   balance: ["SALDO POLYMARKET", "Tu saldo real en pUSD (Polymarket USD), leído directo de Polygon cada 30s — no el PnL de paper trading. Se usa lectura on-chain en vez del endpoint /balance-allowance del CLOB porque ese endpoint reporta 0 para esta cuenta pese a que la wallet sí tiene pUSD y allowance aprobada a los contratos V2 (ver el roadmap en execution/engine.py). Sin dirección configurada en POLYMARKET_FUNDER_ADDRESS, el panel queda vacío."],
@@ -1331,7 +1331,7 @@ async function refresh() {
 
     renderPairLadder(mk, s.strategy_gate, s.stats, s.arb_events);
     renderGuardrails(s.guardrails);
-    renderShadowOrders(s.shadow_orders, s.shadow_stats);
+    renderShadowOrders(s.shadow_orders, s.shadow_stats, s.live_orders);
 
     const b5 = btc.find(m => m.duration === "5m");
     $("pair-info").innerHTML = b5 ? `
@@ -2636,26 +2636,36 @@ function renderPairLadder(mk, gate, stats, arbEvents) {
     <span>eventos recientes <b>${(arbEvents || []).length}</b></span>`;
 }
 
-function renderShadowOrders(orders, stats) {
+function renderShadowOrders(orders, stats, liveOrders) {
   orders = orders || [];
+  liveOrders = liveOrders || [];
   stats = stats || { seen: 0, would_allow: 0, sign_errors: 0 };
+  const submittedCount = liveOrders.filter(o => o.submitted).length;
 
-  $("shadow-status-badge").textContent = `${stats.seen} vistas · ${stats.would_allow} pasarían`;
+  $("shadow-status-badge").textContent =
+    `${stats.seen} vistas · ${stats.would_allow} pasarían · ${submittedCount} enviadas`;
 
   $("shadow-stats").innerHTML = `
     <span>señales vistas <b>${stats.seen}</b></span>
     <span>habrían pasado los guardarraíles <b class="${stats.would_allow > 0 ? "up" : "dim"}">${stats.would_allow}</b></span>
-    <span>errores de firma <b class="${stats.sign_errors > 0 ? "down" : "dim"}">${stats.sign_errors}</b></span>`;
+    <span>errores de firma <b class="${stats.sign_errors > 0 ? "down" : "dim"}">${stats.sign_errors}</b></span>
+    <span>órdenes reales enviadas <b class="${submittedCount > 0 ? "amber" : "dim"}">${submittedCount}</b></span>`;
 
   if (!orders.length) {
-    $("shadow-body").innerHTML = '<tr><td colspan="7" class="dim">esperando la primera señal…</td></tr>';
+    $("shadow-body").innerHTML = '<tr><td colspan="8" class="dim">esperando la primera señal…</td></tr>';
     return;
   }
 
-  $("shadow-body").innerHTML = orders.map(o => {
+  // shadow_orders and live_orders are appended together, once per signal,
+  // in the same server tick — same index means same signal.
+  $("shadow-body").innerHTML = orders.map((o, i) => {
     const passCls = o.allowed ? "up" : "dim";
     const passTxt = o.allowed ? "SÍ" : "NO";
     const why = o.error ? `<span class="down">firma falló: ${o.error}</span>` : o.why;
+    const live = liveOrders[i];
+    const sentTxt = live && live.submitted
+      ? `<span class="amber">SÍ · ${live.order_id || "?"}</span>`
+      : (live && live.error ? `<span class="down">error envío</span>` : '<span class="dim">no</span>');
     return `<tr>
       <td class="dim">${hhmmss(o.ts)}</td>
       <td>${o.side}</td>
@@ -2663,6 +2673,7 @@ function renderShadowOrders(orders, stats) {
       <td>${o.shares ?? "—"}</td>
       <td>$${fmt(o.order_usd, 2)}</td>
       <td class="${passCls}">${passTxt}</td>
+      <td>${sentTxt}</td>
       <td class="dim" style="font-size:10px">${why}</td>
     </tr>`;
   }).join("");

@@ -73,6 +73,7 @@ from moneyclush.execution.guardrails import (
     compute_order_size_usd,
 )
 from moneyclush.execution.shadow import build_shadow_client, run_shadow_order
+from moneyclush.execution.live_order import submit_order_if_allowed
 
 CLOB_URL = "https://clob.polymarket.com"
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -121,6 +122,9 @@ STATE: dict = {
     # execution/shadow.py.
     "shadow_orders": [],
     "shadow_stats": {"seen": 0, "would_allow": 0, "sign_errors": 0},
+    # Real submissions only ever land here the day a human creates
+    # data/TRADING_ARMED — nothing in this codebase does that on its own.
+    "live_orders": [],
     # Second paper track. The arbitrage strategy correctly refuses to trade
     # a pair that costs more than $1, so its curve is flat by design. This
     # one backs the market's favourite on every BTC window instead: it
@@ -835,6 +839,30 @@ async def poll_loop() -> None:
                                             STATE["shadow_stats"]["sign_errors"] += 1
                                         STATE["shadow_orders"].insert(0, shadow.as_dict())
                                         STATE["shadow_orders"] = STATE["shadow_orders"][:30]
+
+                                        # The only call in this codebase that can move real
+                                        # money. `shadow.allowed` is exactly the guardrails
+                                        # verdict — this obeys it, never re-derives it. It stays
+                                        # False for every signal until a human creates
+                                        # data/TRADING_ARMED, which nothing here does on its own.
+                                        live = submit_order_if_allowed(
+                                            client=shadow_client,
+                                            token_id=shadow_token,
+                                            side_label=shadow.side,
+                                            price=shadow.price,
+                                            shares=shadow.shares,
+                                            order_usd=shadow.order_usd,
+                                            allowed=shadow.allowed,
+                                            why=shadow.why,
+                                        )
+                                        if live.submitted:
+                                            add_alert(
+                                                "warn",
+                                                f"ORDEN REAL ENVIADA: {live.side} x{live.shares:.0f} "
+                                                f"@ {live.price*100:.0f}¢ · id={live.order_id}",
+                                            )
+                                        STATE["live_orders"].insert(0, live.as_dict())
+                                        STATE["live_orders"] = STATE["live_orders"][:30]
                                     except Exception as exc:
                                         # Shadow mode observes the strategy; it must never be able
                                         # to take the strategy or paper trading down with it.
