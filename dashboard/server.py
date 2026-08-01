@@ -72,6 +72,7 @@ from moneyclush.execution.guardrails import (
     compute_max_exposure_usd,
     compute_order_size_usd,
 )
+from moneyclush.execution.shadow import build_shadow_client, run_shadow_order
 
 CLOB_URL = "https://clob.polymarket.com"
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -116,6 +117,10 @@ STATE: dict = {
     # paper PnL. None until the first successful read.
     "polymarket_balance": None,
     "polymarket_balance_curve": [],
+    # Real signed orders built from real signals — never submitted. See
+    # execution/shadow.py.
+    "shadow_orders": [],
+    "shadow_stats": {"seen": 0, "would_allow": 0, "sign_errors": 0},
     # Second paper track. The arbitrage strategy correctly refuses to trade
     # a pair that costs more than $1, so its curve is flat by design. This
     # one backs the market's favourite on every BTC window instead: it
@@ -154,6 +159,22 @@ strategy = TemporalArbitrageStrategy(block_size=25)
 # ever needed, not the day it is.
 kill_switch = KillSwitch()
 safety_limits = SafetyLimits()
+
+# Shadow client: builds and signs a real order for every real signal, but
+# nothing here ever calls post_order (see execution/shadow.py). None if
+# the wallet isn't configured — shadow mode is then silently a no-op
+# rather than a crash, since most of this dashboard works fine without it.
+shadow_client = None
+if os.environ.get("PRIVATE_KEY") and os.environ.get("POLYMARKET_FUNDER_ADDRESS"):
+    try:
+        shadow_client = build_shadow_client(
+            private_key=os.environ["PRIVATE_KEY"],
+            funder=os.environ["POLYMARKET_FUNDER_ADDRESS"],
+            signature_type=int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "1")),
+        )
+        log.info("shadow.client_ready")
+    except Exception as exc:
+        log.warning("shadow.client_failed", error=str(exc)[:160])
 
 paper_positions: dict[str, Position] = {}
 # condition_id -> {slug, asset, duration, opening, window_end}
@@ -790,6 +811,35 @@ async def poll_loop() -> None:
                             )
                             signal = strategy.evaluate(state_obj, fv, pos)
                             if signal is not None and signal.edge > 0 and data_trusted:
+                                if shadow_client is not None:
+                                    try:
+                                        shadow_token = (
+                                            mk.token_id_up if signal.side == OutcomeSide.UP
+                                            else mk.token_id_down
+                                        )
+                                        shadow = run_shadow_order(
+                                            client=shadow_client,
+                                            token_id=shadow_token,
+                                            side_label=f"{mk.asset} {mk.duration} {signal.side.value.upper()}",
+                                            price=signal.target_price,
+                                            reason=signal.reason,
+                                            kill_switch=kill_switch,
+                                            limits=safety_limits,
+                                            on_chain_balance_usd=STATE.get("polymarket_balance"),
+                                            seconds_remaining=mk.seconds_remaining,
+                                        )
+                                        STATE["shadow_stats"]["seen"] += 1
+                                        if shadow.allowed:
+                                            STATE["shadow_stats"]["would_allow"] += 1
+                                        if shadow.error:
+                                            STATE["shadow_stats"]["sign_errors"] += 1
+                                        STATE["shadow_orders"].insert(0, shadow.as_dict())
+                                        STATE["shadow_orders"] = STATE["shadow_orders"][:30]
+                                    except Exception as exc:
+                                        # Shadow mode observes the strategy; it must never be able
+                                        # to take the strategy or paper trading down with it.
+                                        log.warning("shadow.tick_failed", error=str(exc)[:160])
+
                                 book = book_up if signal.side == OutcomeSide.UP else book_down
                                 cost = book.executable_cost("buy", signal.target_size)
                                 if cost is not None:
