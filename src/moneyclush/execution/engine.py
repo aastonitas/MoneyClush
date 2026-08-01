@@ -2,6 +2,37 @@
 
 Converts trade signals into actual orders, managing fills, cancellations,
 and the reservation price adjustment based on current inventory.
+
+Status: planning only, nothing here submits a live order. `plan_orders` and
+`simulate_fill` are paper-mode building blocks for a *taker* strategy
+(TemporalArbitrageStrategy buys at the current ask on whichever leg is
+cheap). A two-sided maker engine — resting a bid on Up and a bid on Down at
+the same time, sized by model confidence, the way the dashboard's "PAR
+MAKER" reading in the TRADING tab describes — does not exist yet. Gap to
+close before that can run live, in order:
+
+1. Real CLOB auth. `PolymarketClient._auth_headers` sends POLY_API_KEY/
+   SECRET/PASSPHRASE headers, which is not how Polymarket's CLOB
+   authenticates. Orders must be EIP-712-signed with the trading wallet's
+   private key, then exchanged for L2 API credentials (see py-clob-client).
+   `place_limit_order`'s POST to /order will 401 against the real API as
+   written today.
+2. A maker/ladder strategy. `TemporalArbitrageStrategy` only ever buys at
+   the ask (crosses the spread). A two-sided engine needs its own class:
+   place a resting bid on both legs, keep bid_up + bid_down under the same
+   max_pair_cost gate, and skew size toward the side the model favours
+   (reservation_price() below already has the inventory-skew math for this).
+3. Order lifecycle. No cancel/replace loop exists — a resting bid must be
+   pulled and re-quoted as the book moves, and partial fills on one leg
+   need to be tracked so the other leg's target size adjusts.
+4. Wiring into poll_loop (dashboard/server.py). The poll loop only reads
+   market state today; a live engine needs its own tick that reads
+   STATE["markets"], calls the maker strategy, and posts orders through an
+   authenticated PolymarketClient.
+5. Guardrails before any of this touches real funds: a balance check before
+   every order, a max-exposure-per-window cap, and a kill switch. Paper
+   mode (no api_key -> `place_limit_order` returns a SIMULATED stub) should
+   stay the default until each of the above is verified independently.
 """
 
 from __future__ import annotations

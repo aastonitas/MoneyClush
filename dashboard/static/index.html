@@ -901,6 +901,27 @@
       </div>
       </div>
     </div>
+
+    <div class="grid-stack-item" gs-id="trading-pair" gs-x="0" gs-y="13" gs-w="12" gs-h="8">
+      <div class="grid-stack-item-content panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">PAR EN VIVO · UP + DOWN</span>
+        <i class="info" data-key="trading-pair">i</i></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>VENTANA</th><th>UP bid/ask</th><th>DOWN bid/ask</th>
+            <th>PAR TOMADOR</th><th>PAR MAKER</th><th>CIERRA</th></tr></thead>
+          <tbody id="pair-ladder-body"></tbody>
+        </table>
+        <div class="scan-detail" style="margin-top:10px" id="pair-stats"></div>
+        <div class="dim" style="margin-top:10px; font-size:11px; line-height:1.5">
+          <b class="text">PAR TOMADOR</b> = comprar ambos lados ya, al ask — lo que hoy vigila el bot para avisar arbitraje.
+          <b class="text">PAR MAKER</b> = lo que costaría si ambas <i>bids</i> se llenaran — la lectura que necesitaría
+          un motor de dos lados como el de la captura (escalera de límites en ambos lados, sin cruzar el spread).
+          Ese motor todavía no coloca órdenes: solo estamos midiendo si el hueco existe.
+        </div>
+      </div>
+      </div>
+    </div>
 </div>
 
 <div class="footer-note">
@@ -923,6 +944,7 @@ const INFO = {
   positions: ["PAPER POSITIONS", "Inventario simulado por mercado. UP/DOWN muestra shares y coste medio. Las shares emparejadas (mismo número de Up y Down) pagan $1 seguro al resolver; el exceso es exposición direccional. INV = capital invertido."],
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "Dos pistas de paper trading en BTC. El arbitraje Up+Down exige que el par cueste ≤96¢ para operar — normalmente cotiza sobre 100¢, así que su curva está plana a propósito, no por fallo. La curva que se mueve es 'backing al favorito': $1 por ventana al lado que el mercado cotiza más caro, entrado pasado el 40% de la ventana. Debajo, calibración por banda de precio — el mismo desglose que en deportes, para ver si el sesgo del favorito aparece también aquí."],
+  "trading-pair": ["PAR EN VIVO · UP + DOWN", "Une el libro de ambos lados de BTC (5m y 15m) en una sola lectura: PAR TOMADOR es best_ask_up + best_ask_down, el coste real de comprar ambos lados ahora mismo — por debajo de 100¢ es arbitraje sin importar quién gane. PAR MAKER es best_bid_up + best_bid_down: lo que costaría si dos órdenes límite tuyas, una en cada lado, se llenaran ambas — la métrica que le importaría a un motor de market making de dos lados (como el de la captura SIR-UPALOT), que hoy no existe aquí. 'mejor par visto' y 'umbral operable' vienen del mismo gate que decide cuándo se registra un arbitraje en la pestaña CRYPTO."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
   "news-crypto": ["NOTICIAS CRYPTO", "Titulares de CoinDesk y Cointelegraph, los más recientes primero. Traducidos automáticamente al español — pasa el ratón por encima para ver el original en inglés. Se refrescan cada 5 minutos; las noticias no se mueven a la velocidad de un order book."],
   "news-sports": ["NOTICIAS DEPORTES", "Titulares de BBC Sport y ESPN, traducidos al español (el original aparece al pasar el ratón). Contexto para los partidos de la pestaña, no señal de trading."],
@@ -1147,6 +1169,8 @@ async function refresh() {
         <td class="amber">${cents(1 - m.fair_up)}</td>
         <td class="${m.net_edge_down > 0 ? "up" : "dim"}">${(m.net_edge_down*100).toFixed(1)}%</td></tr>
     `).join("") || '<tr><td colspan="5" class="dim">cargando libro…</td></tr>';
+
+    renderPairLadder(mk, s.strategy_gate, s.stats, s.arb_events);
 
     const b5 = btc.find(m => m.duration === "5m");
     $("pair-info").innerHTML = b5 ? `
@@ -2409,6 +2433,43 @@ function renderSignals(data) {
   $("sig-body").querySelectorAll(".sig-btn").forEach(b => {
     b.addEventListener("click", () => markTaken(decodeURIComponent(b.dataset.sig), b));
   });
+}
+
+function renderPairLadder(mk, gate, stats, arbEvents) {
+  const rows = ["5m", "15m"].map(d => {
+    const m = mk.find(x => x.asset === "BTC" && x.duration === d);
+    if (!m) return `<tr><td>${d}</td><td colspan="5" class="dim">sin datos</td></tr>`;
+
+    const taker = m.pair_cost;
+    const maker = (m.best_bid_up != null && m.best_bid_down != null)
+      ? m.best_bid_up + m.best_bid_down : null;
+    const takerCls = taker != null && taker < 1 ? "up" : "dim";
+    const makerCls = maker != null ? (maker < 1 ? "up" : "amber") : "dim";
+
+    const total = d === "5m" ? 300 : 900;
+    const pct = Math.max(0, Math.min(100, (m.seconds_remaining / total) * 100));
+    const mm = Math.floor(m.seconds_remaining / 60), ss = String(m.seconds_remaining % 60).padStart(2, "0");
+
+    return `<tr>
+      <td>BTC ${d}</td>
+      <td><span class="up">${cents(m.best_bid_up)}</span> <span class="dim">/</span> ${cents(m.best_ask_up)}</td>
+      <td><span class="down">${cents(m.best_bid_down)}</span> <span class="dim">/</span> ${cents(m.best_ask_down)}</td>
+      <td class="${takerCls}" style="font-weight:700">${cents(taker)}</td>
+      <td class="${makerCls}" style="font-weight:700">${maker != null ? cents(maker) : "—"}</td>
+      <td><span class="cyan">${mm}:${ss}</span><div class="tbar"><i style="width:${pct}%"></i></div></td>
+    </tr>`;
+  }).join("");
+  $("pair-ladder-body").innerHTML = rows;
+
+  const bestSeen = gate && gate.best_pair_seen != null ? cents(gate.best_pair_seen) : "—";
+  const bestCls = gate && gate.best_pair_seen != null && gate.best_pair_seen < 1 ? "up" : "amber";
+  const maxCost = gate && gate.max_pair_cost != null ? cents(gate.max_pair_cost) : "—";
+  const arbsSeen = (stats && stats.arbs_seen) || 0;
+  $("pair-stats").innerHTML = `
+    <span>mejor par visto (sesión) <b class="${bestCls}">${bestSeen}</b></span>
+    <span>umbral operable <b>${maxCost}</b></span>
+    <span>arbitrajes vistos <b class="${arbsSeen > 0 ? "up" : "dim"}">${arbsSeen}</b></span>
+    <span>eventos recientes <b>${(arbEvents || []).length}</b></span>`;
 }
 
 function drawFilterRow(id, values, active, onPick) {
