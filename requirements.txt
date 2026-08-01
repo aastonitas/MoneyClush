@@ -1,4 +1,7 @@
-py-clob-client>=0.18.0
+# V2 only — the V1 package cannot sign orders the post-2026-04-28 CLOB
+# accepts, and importing py_clob_client_v2 against it fails at startup.
+# Keep in sync with pyproject.toml: this file is what the deploy installs.
+py-clob-client-v2>=1.1.0
 python-dotenv>=1.0.0
 pydantic>=2.0
 httpx>=0.27
