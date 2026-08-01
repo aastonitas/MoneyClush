@@ -107,6 +107,11 @@ def _floor_cents(value: float) -> float:
 def compute_order_size_usd(balance_usd: float, limits: SafetyLimits) -> float:
     """What the next order should cost, in dollars — `order_fraction` of
     the live balance, never more than the absolute backstop ceiling.
+
+    Note this is a *target*, not the final cost: Polymarket sells whole
+    shares with a per-market minimum lot (5 on the BTC books), so at high
+    prices the smallest possible order can exceed this. That case is
+    refused by the size guardrail rather than rounded past.
     """
     return _floor_cents(min(balance_usd * limits.order_fraction, limits.max_order_usd))
 

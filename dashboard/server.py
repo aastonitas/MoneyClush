@@ -78,7 +78,7 @@ from moneyclush.execution.shadow import (
     build_shadow_client,
     run_shadow_order,
 )
-from moneyclush.execution.live_order import submit_order_if_allowed
+from moneyclush.execution.live_order import LiveOrderLedger, submit_order_if_allowed
 
 CLOB_URL = "https://clob.polymarket.com"
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -174,6 +174,11 @@ strategy = TemporalArbitrageStrategy(block_size=25)
 # ever needed, not the day it is.
 kill_switch = KillSwitch()
 safety_limits = SafetyLimits()
+# Feeds the history-dependent guardrails (open exposure, orders/hour).
+# In memory: a restart forgets recent submissions, which loosens those
+# two limits for an hour rather than tightening them — worth knowing, and
+# the reason arming survives no restart either.
+live_ledger = LiveOrderLedger()
 
 # Shadow client: signs a real order for every real signal. Submitting is
 # gated separately (execution/live_order.py). None if the wallet isn't
@@ -857,6 +862,8 @@ async def poll_loop() -> None:
                                             limits=safety_limits,
                                             on_chain_balance_usd=STATE.get("polymarket_balance"),
                                             seconds_remaining=mk.seconds_remaining,
+                                            open_exposure_usd=live_ledger.open_exposure_usd(),
+                                            orders_in_last_hour=live_ledger.orders_in_last_hour(),
                                         )
                                         STATE["shadow_stats"]["seen"] += 1
                                         STATE["shadow_stats"]["last_signal_ms"] = shadow.ts_ms
@@ -885,6 +892,13 @@ async def poll_loop() -> None:
                                             why=shadow.why,
                                         )
                                         if live.submitted:
+                                            # Record before anything else can throw: an
+                                            # unrecorded submission is one the exposure and
+                                            # rate limits will not count against the next.
+                                            live_ledger.record(
+                                                usd=live.order_usd,
+                                                window_end_epoch=mk.window_end_epoch,
+                                            )
                                             add_alert(
                                                 "warn",
                                                 f"ORDEN REAL ENVIADA: {live.side} x{live.shares:.0f} "
@@ -1315,6 +1329,9 @@ def guardrails_payload() -> dict:
         **kill_switch.status(),
         "can_submit": can_submit,
         "can_submit_reason": can_submit_reason,
+        "open_exposure_usd": live_ledger.open_exposure_usd(),
+        "orders_in_last_hour": live_ledger.orders_in_last_hour(),
+        "spent_today_usd": live_ledger.spent_today_usd(),
         "limits": asdict(safety_limits),
         "order_size_usd_now": (
             compute_order_size_usd(balance, safety_limits) if balance is not None else None

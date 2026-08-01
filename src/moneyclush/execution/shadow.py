@@ -129,6 +129,9 @@ def run_shadow_order(
     limits: SafetyLimits,
     on_chain_balance_usd: Optional[float],
     seconds_remaining: float,
+    open_exposure_usd: float = 0.0,
+    orders_in_last_hour: int = 0,
+    daily_realized_pnl_usd: float = 0.0,
 ) -> ShadowResult:
     """Size, guardrail-check, and sign one order. Never posts it.
 
@@ -152,16 +155,13 @@ def run_shadow_order(
     shares = max(MIN_ORDER_SHARES, math.floor(target_usd / price)) if price > 0 else MIN_ORDER_SHARES
     order_usd = round(shares * price, 4)
 
-    # Nothing live has ever opened a position or lost money yet, so these
-    # are placeholders — see engine.py roadmap item 4 for where they stop
-    # being placeholders.
     common = dict(
         kill_switch=kill_switch,
         limits=limits,
         on_chain_balance_usd=on_chain_balance_usd,
-        open_exposure_usd=0.0,
-        daily_realized_pnl_usd=0.0,
-        orders_in_last_hour=0,
+        open_exposure_usd=open_exposure_usd,
+        daily_realized_pnl_usd=daily_realized_pnl_usd,
+        orders_in_last_hour=orders_in_last_hour,
         seconds_remaining=seconds_remaining,
     )
     allowed, why = check_order_allowed(order_usd, **common)
