@@ -66,7 +66,12 @@ from moneyclush.strategies.categories import (
     SportsBasketArb,
 )
 from moneyclush.strategies.temporal_arbitrage import TemporalArbitrageStrategy
-from moneyclush.execution.guardrails import KillSwitch, SafetyLimits
+from moneyclush.execution.guardrails import (
+    KillSwitch,
+    SafetyLimits,
+    compute_max_exposure_usd,
+    compute_order_size_usd,
+)
 
 CLOB_URL = "https://clob.polymarket.com"
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -1191,15 +1196,29 @@ async def shutdown() -> None:
     await clob_ws.stop()
 
 
-@app.get("/api/state")
-async def get_state() -> JSONResponse:
-    # Cheap (two file-existence checks) — computed fresh on every fetch so
-    # the dashboard reflects a button press immediately, not on the next
-    # 3s poll tick.
-    STATE["guardrails"] = {
+def guardrails_payload() -> dict:
+    """Single source of truth for the guardrails JSON shape — computed
+    fresh (two file-existence checks + arithmetic, all cheap) wherever
+    it's needed, so /api/state and the two emergency endpoints can never
+    drift out of sync the way they did the first time this was written
+    (the endpoints originally omitted `limits` and blanked the dashboard).
+    """
+    balance = STATE.get("polymarket_balance")
+    return {
         **kill_switch.status(),
         "limits": asdict(safety_limits),
+        "order_size_usd_now": (
+            compute_order_size_usd(balance, safety_limits) if balance is not None else None
+        ),
+        "max_exposure_usd_now": (
+            compute_max_exposure_usd(balance, safety_limits) if balance is not None else None
+        ),
     }
+
+
+@app.get("/api/state")
+async def get_state() -> JSONResponse:
+    STATE["guardrails"] = guardrails_payload()
     return JSONResponse(STATE)
 
 
@@ -1211,7 +1230,7 @@ async def emergency_stop() -> JSONResponse:
     kill_switch.trigger_stop("manual dashboard stop")
     add_alert("warn", "PARADA DE EMERGENCIA activada — ninguna orden real se enviará")
     log.warning("guardrails.emergency_stop")
-    return JSONResponse({**kill_switch.status(), "limits": asdict(safety_limits)})
+    return JSONResponse(guardrails_payload())
 
 
 @app.post("/api/emergency-resume")
@@ -1223,7 +1242,7 @@ async def emergency_resume() -> JSONResponse:
     kill_switch.clear_stop()
     add_alert("info", "Parada de emergencia liberada")
     log.warning("guardrails.emergency_resume")
-    return JSONResponse({**kill_switch.status(), "limits": asdict(safety_limits)})
+    return JSONResponse(guardrails_payload())
 
 
 @app.get("/api/sports")

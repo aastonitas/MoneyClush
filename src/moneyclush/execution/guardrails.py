@@ -26,6 +26,7 @@ a server that has never run before — none of these should ever look like
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -53,17 +54,26 @@ def _env_int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class SafetyLimits:
     """Every field is env-overridable so limits can be tuned without a
-    code change. Defaults are the ones agreed on 2026-08-01, sized against
-    a real balance of ~$14: a single mistake should be recoverable, and a
-    bug that fires repeatedly should still be caught by the daily/hourly
-    caps before it can matter.
+    code change. Sizing agreed on 2026-08-01: order size is a *fraction*
+    of the live on-chain balance (order_fraction), not a flat dollar
+    figure — the same idea as the unused KELLY_FRACTION in .env.example.
+    A flat dollar cap does not grow when the account grows and, worse,
+    does not shrink after a loss unless someone remembers to lower it by
+    hand; a fraction does both automatically. max_order_usd is kept as an
+    absolute backstop ceiling only — protection against a misread balance
+    or a future bug, not the number sizing is supposed to target.
     """
 
-    max_order_usd: float = field(
-        default_factory=lambda: _env_float("MONEYCLUSH_MAX_ORDER_USD", 1.0)
+    order_fraction: float = field(
+        default_factory=lambda: _env_float("MONEYCLUSH_ORDER_FRACTION", 0.25)
     )
-    max_open_exposure_usd: float = field(
-        default_factory=lambda: _env_float("MONEYCLUSH_MAX_OPEN_EXPOSURE_USD", 3.0)
+    max_order_usd: float = field(
+        default_factory=lambda: _env_float("MONEYCLUSH_MAX_ORDER_USD", 10.0)
+    )
+    # Two order-fractions' worth open at once, not a flat dollar figure,
+    # for the same reason order size itself isn't one.
+    max_open_exposure_fraction: float = field(
+        default_factory=lambda: _env_float("MONEYCLUSH_MAX_OPEN_EXPOSURE_FRACTION", 0.5)
     )
     max_daily_loss_usd: float = field(
         default_factory=lambda: _env_float("MONEYCLUSH_MAX_DAILY_LOSS_USD", 3.0)
@@ -79,6 +89,26 @@ class SafetyLimits:
     balance_buffer_usd: float = field(
         default_factory=lambda: _env_float("MONEYCLUSH_BALANCE_BUFFER_USD", 0.05)
     )
+
+
+def _floor_cents(value: float) -> float:
+    """Round down to the cent. Money you might spend must never be
+    rounded up — round(3.555, 2) == 3.56 would let two "25%" orders add
+    up to more than the 50% exposure cap they're supposed to fit under.
+    """
+    return math.floor(value * 100) / 100
+
+
+def compute_order_size_usd(balance_usd: float, limits: SafetyLimits) -> float:
+    """What the next order should cost, in dollars — `order_fraction` of
+    the live balance, never more than the absolute backstop ceiling.
+    """
+    return _floor_cents(min(balance_usd * limits.order_fraction, limits.max_order_usd))
+
+
+def compute_max_exposure_usd(balance_usd: float, limits: SafetyLimits) -> float:
+    """How much can be open across all positions at once, in dollars."""
+    return _floor_cents(balance_usd * limits.max_open_exposure_fraction)
 
 
 class KillSwitch:
@@ -155,17 +185,25 @@ def check_order_allowed(
         return False, "trading not armed"
     if on_chain_balance_usd is None:
         return False, "on-chain balance unavailable — refusing to trade blind"
-    if order_usd > limits.max_order_usd:
-        return False, f"order ${order_usd:.2f} exceeds max ${limits.max_order_usd:.2f}"
+
+    max_order_now = compute_order_size_usd(on_chain_balance_usd, limits)
+    if order_usd > max_order_now:
+        return False, (
+            f"order ${order_usd:.2f} exceeds {limits.order_fraction*100:.0f}% of "
+            f"balance (${max_order_now:.2f}, backstop ${limits.max_order_usd:.2f})"
+        )
     if order_usd + limits.balance_buffer_usd > on_chain_balance_usd:
         return False, (
             f"order ${order_usd:.2f} + buffer exceeds on-chain balance "
             f"${on_chain_balance_usd:.2f}"
         )
-    if open_exposure_usd + order_usd > limits.max_open_exposure_usd:
+
+    max_exposure_now = compute_max_exposure_usd(on_chain_balance_usd, limits)
+    if open_exposure_usd + order_usd > max_exposure_now:
         return False, (
-            f"open exposure ${open_exposure_usd:.2f} + order would exceed max "
-            f"${limits.max_open_exposure_usd:.2f}"
+            f"open exposure ${open_exposure_usd:.2f} + order would exceed "
+            f"{limits.max_open_exposure_fraction*100:.0f}% of balance "
+            f"(${max_exposure_now:.2f})"
         )
     if daily_realized_pnl_usd <= -limits.max_daily_loss_usd:
         return False, (
