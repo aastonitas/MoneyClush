@@ -66,6 +66,7 @@ from moneyclush.strategies.categories import (
     SportsBasketArb,
 )
 from moneyclush.strategies.temporal_arbitrage import TemporalArbitrageStrategy
+from moneyclush.execution.guardrails import KillSwitch, SafetyLimits
 
 CLOB_URL = "https://clob.polymarket.com"
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
@@ -141,6 +142,13 @@ STATE: dict = {
 
 fv_engine = FairValueEngine()
 strategy = TemporalArbitrageStrategy(block_size=25)
+
+# Nothing places a live order yet (see execution/engine.py roadmap items
+# 2-4) — this is the choke point that will gate it once that exists.
+# Built and wired now so the emergency stop is proven to work before it is
+# ever needed, not the day it is.
+kill_switch = KillSwitch()
+safety_limits = SafetyLimits()
 
 paper_positions: dict[str, Position] = {}
 # condition_id -> {slug, asset, duration, opening, window_end}
@@ -1185,7 +1193,37 @@ async def shutdown() -> None:
 
 @app.get("/api/state")
 async def get_state() -> JSONResponse:
+    # Cheap (two file-existence checks) — computed fresh on every fetch so
+    # the dashboard reflects a button press immediately, not on the next
+    # 3s poll tick.
+    STATE["guardrails"] = {
+        **kill_switch.status(),
+        "limits": asdict(safety_limits),
+    }
     return JSONResponse(STATE)
+
+
+@app.post("/api/emergency-stop")
+async def emergency_stop() -> JSONResponse:
+    """The panic button. No confirmation step — an emergency stop that
+    makes you click twice is a worse emergency stop.
+    """
+    kill_switch.trigger_stop("manual dashboard stop")
+    add_alert("warn", "PARADA DE EMERGENCIA activada — ninguna orden real se enviará")
+    log.warning("guardrails.emergency_stop")
+    return JSONResponse({**kill_switch.status(), "limits": asdict(safety_limits)})
+
+
+@app.post("/api/emergency-resume")
+async def emergency_resume() -> JSONResponse:
+    """Deliberately a separate call from emergency-stop, not a toggle of
+    the same button — resuming after a stop should never be one accidental
+    click away from the button that caused it.
+    """
+    kill_switch.clear_stop()
+    add_alert("info", "Parada de emergencia liberada")
+    log.warning("guardrails.emergency_resume")
+    return JSONResponse({**kill_switch.status(), "limits": asdict(safety_limits)})
 
 
 @app.get("/api/sports")

@@ -17,6 +17,12 @@ data/paper_metrics.jsonl
 data/predictions.jsonl
 data/signals_taken.jsonl
 
+# Guardrail markers (execution/guardrails.py). A committed KILL_SWITCH or
+# TRADING_ARMED would mean every fresh deploy inherits whatever state this
+# machine happened to be in — the opposite of the fail-safe default.
+data/KILL_SWITCH
+data/TRADING_ARMED
+
 # Re-downloadable probe cache. scripts/probe_1min.py refetches it when
 # absent, so committing half a megabyte of candles buys nothing.
 data/history/btc_1m_probe.json

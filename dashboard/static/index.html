@@ -455,6 +455,30 @@
     letter-spacing: .03em;
   }
   #balance-canvas { margin-top: 6px; height: 64px !important; }
+
+  .guardrails-panel { border-color: rgba(255,68,85,.25); }
+  .gr-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .gr-limits { flex: 1; min-width: 220px; }
+  .gr-limits .sstat b { color: var(--text); }
+  .gr-controls { min-width: 200px; }
+  .gr-stop-btn {
+    display: block; width: 100%;
+    background: rgba(255,68,85,.12); color: var(--red);
+    border: 1px solid var(--red); border-radius: 3px;
+    font-family: var(--mono); font-weight: 700; font-size: 13px;
+    letter-spacing: .04em; padding: 12px 10px; cursor: pointer;
+  }
+  .gr-stop-btn:hover { background: rgba(255,68,85,.22); }
+  .gr-stop-btn:disabled { opacity: .4; cursor: default; }
+  .gr-resume-btn {
+    display: block; width: 100%; margin-top: 8px;
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 3px;
+    font-family: var(--mono); font-size: 10px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  .gr-resume-btn:hover { color: var(--text); border-color: var(--text-dim); }
+  .gr-resume-btn:disabled { opacity: .3; cursor: default; }
   canvas { width: 100%; height: 110px; display: block; }
 
   .panel.collapsed .panel-body,
@@ -953,6 +977,24 @@
       </div>
       </div>
     </div>
+
+    <div class="grid-stack-item" gs-id="trading-guardrails" gs-x="0" gs-y="21" gs-w="12" gs-h="7">
+      <div class="grid-stack-item-content panel guardrails-panel">
+      <div class="panel-head"><span class="slash">//</span><span class="t">GUARDARRAÍLES</span>
+        <i class="info" data-key="guardrails">i</i>
+        <span class="badge" id="gr-status-badge">—</span></div>
+      <div class="panel-body">
+        <div class="gr-row">
+          <div class="gr-limits" id="gr-limits"></div>
+          <div class="gr-controls">
+            <button id="gr-stop-btn" class="gr-stop-btn">■ PARADA DE EMERGENCIA</button>
+            <button id="gr-resume-btn" class="gr-resume-btn">reanudar</button>
+            <div class="dim" id="gr-note" style="margin-top:8px; font-size:11px; line-height:1.5"></div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
 </div>
 
 <div class="footer-note">
@@ -975,6 +1017,7 @@ const INFO = {
   positions: ["PAPER POSITIONS", "Inventario simulado por mercado. UP/DOWN muestra shares y coste medio. Las shares emparejadas (mismo número de Up y Down) pagan $1 seguro al resolver; el exceso es exposición direccional. INV = capital invertido."],
   markets: ["LIVE MARKETS", "Mercados Up/Down activos descubiertos vía Gamma API cada 3s. Los slugs siguen el patrón asset-updown-duración-epoch. UP/DOWN = precio actual del outcome. LIQ = liquidez del CLOB. T-REMAIN = tiempo hasta que la ventana cierre y resuelva por Chainlink."],
   pnl: ["PNL CURVE", "Dos pistas de paper trading en BTC. El arbitraje Up+Down exige que el par cueste ≤96¢ para operar — normalmente cotiza sobre 100¢, así que su curva está plana a propósito, no por fallo. La curva que se mueve es 'backing al favorito': $1 por ventana al lado que el mercado cotiza más caro, entrado pasado el 40% de la ventana. Debajo, calibración por banda de precio — el mismo desglose que en deportes, para ver si el sesgo del favorito aparece también aquí."],
+  guardrails: ["GUARDARRAÍLES", "Los límites y el candado que cualquier orden real tendría que pasar antes de enviarse. Hoy no hay ningún motor que coloque órdenes reales — nada aquí bloquea nada porque no hay nada que bloquear — pero el candado ya funciona: apretar PARADA DE EMERGENCIA crea data/KILL_SWITCH, que un futuro motor debe revisar antes de cada orden. Por defecto, cualquier arranque nuevo queda sin armar (NO ARMADO): armar el envío de órdenes reales es una acción explícita separada que todavía no existe en el dashboard, a propósito — se añade junto con el motor que realmente las envíe."],
   "trading-pair": ["PAR EN VIVO · UP + DOWN", "Une el libro de ambos lados de BTC (5m y 15m) en una sola lectura: PAR TOMADOR es best_ask_up + best_ask_down, el coste real de comprar ambos lados ahora mismo — por debajo de 100¢ es arbitraje sin importar quién gane. PAR MAKER es best_bid_up + best_bid_down: lo que costaría si dos órdenes límite tuyas, una en cada lado, se llenaran ambas — la métrica que le importaría a un motor de market making de dos lados (como el de la captura SIR-UPALOT), que hoy no existe aquí. 'mejor par visto' y 'umbral operable' vienen del mismo gate que decide cuándo se registra un arbitraje en la pestaña CRYPTO."],
   balance: ["SALDO POLYMARKET", "Tu saldo real en pUSD (Polymarket USD), leído directo de Polygon cada 30s — no el PnL de paper trading. Se usa lectura on-chain en vez del endpoint /balance-allowance del CLOB porque ese endpoint reporta 0 para esta cuenta pese a que la wallet sí tiene pUSD y allowance aprobada a los contratos V2 (ver el roadmap en execution/engine.py). Sin dirección configurada en POLYMARKET_FUNDER_ADDRESS, el panel queda vacío."],
   depth: ["BTC DEPTH", "Libro real del CLOB. FAIR = P(Up) = Φ(distancia / σ restante), el modelo browniano: la probabilidad de que un paseo aleatorio acabe por encima de donde empezó. dist vs open = cuánto se ha movido BTC desde la apertura de la ventana (en puntos básicos). σ restante = volatilidad esperada en el tiempo que queda — se encoge según pasa el tiempo, por eso el mismo movimiento pesa más al final. z = dist / σ. pair = coste de Up+Down juntos; si baja de 100¢ hay arbitraje."],
@@ -1271,6 +1314,7 @@ async function refresh() {
     `).join("") || '<tr><td colspan="5" class="dim">cargando libro…</td></tr>';
 
     renderPairLadder(mk, s.strategy_gate, s.stats, s.arb_events);
+    renderGuardrails(s.guardrails);
 
     const b5 = btc.find(m => m.duration === "5m");
     $("pair-info").innerHTML = b5 ? `
@@ -2574,6 +2618,62 @@ function renderPairLadder(mk, gate, stats, arbEvents) {
     <span>arbitrajes vistos <b class="${arbsSeen > 0 ? "up" : "dim"}">${arbsSeen}</b></span>
     <span>eventos recientes <b>${(arbEvents || []).length}</b></span>`;
 }
+
+function renderGuardrails(gr) {
+  gr = gr || {};
+  const armed = !!gr.armed;
+  const killed = !!gr.killed;
+  const live = !!gr.live_orders_allowed;
+  const limits = gr.limits || {};
+
+  const badge = $("gr-status-badge");
+  if (killed) {
+    badge.textContent = "DETENIDO";
+    badge.className = "badge amber";
+  } else if (armed) {
+    badge.textContent = "ARMADO";
+    badge.className = "badge amber";
+  } else {
+    badge.textContent = "NO ARMADO";
+    badge.className = "badge";
+  }
+
+  $("gr-limits").innerHTML = `
+    <div class="sstat"><span>máximo por orden</span><b>$${fmt(limits.max_order_usd, 2)}</b></div>
+    <div class="sstat"><span>exposición abierta máxima</span><b>$${fmt(limits.max_open_exposure_usd, 2)}</b></div>
+    <div class="sstat"><span>pérdida máxima diaria</span><b>$${fmt(limits.max_daily_loss_usd, 2)}</b></div>
+    <div class="sstat"><span>órdenes por hora</span><b>${limits.max_orders_per_hour ?? "—"}</b></div>
+    <div class="sstat"><span>mínimo segundos restantes</span><b>${fmt(limits.min_seconds_remaining, 0)}s</b></div>
+    <div class="sstat"><span>colchón de saldo</span><b>$${fmt(limits.balance_buffer_usd, 2)}</b></div>`;
+
+  $("gr-stop-btn").disabled = killed;
+  $("gr-resume-btn").disabled = !killed;
+
+  $("gr-note").innerHTML = killed
+    ? `<span class="down">Parada de emergencia activa.</span> Ningún motor futuro enviará órdenes reales mientras data/KILL_SWITCH exista.`
+    : (armed
+        ? `Órdenes reales permitidas si todo lo demás se cumple: <b class="${live ? "up" : "dim"}">${live ? "SÍ" : "NO"}</b>`
+        : `Sin armar — no existe todavía forma de armar el envío de órdenes reales desde el dashboard, a propósito. Nada de esto bloquea nada hoy porque no hay ningún motor que coloque órdenes.`);
+}
+
+async function initGuardrails() {
+  $("gr-stop-btn").addEventListener("click", async () => {
+    if (!confirm("¿Activar la parada de emergencia? Ningún motor futuro podrá enviar órdenes reales hasta que se libere manualmente.")) return;
+    $("gr-stop-btn").disabled = true;
+    try {
+      const r = await fetch("/api/emergency-stop", { method: "POST" });
+      renderGuardrails(await r.json());
+    } catch (e) { $("gr-stop-btn").disabled = false; }
+  });
+  $("gr-resume-btn").addEventListener("click", async () => {
+    $("gr-resume-btn").disabled = true;
+    try {
+      const r = await fetch("/api/emergency-resume", { method: "POST" });
+      renderGuardrails(await r.json());
+    } catch (e) { $("gr-resume-btn").disabled = false; }
+  });
+}
+initGuardrails();
 
 function drawFilterRow(id, values, active, onPick) {
   const host = $(id);
