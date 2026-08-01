@@ -27,6 +27,7 @@ from moneyclush.execution.guardrails import (
     SafetyLimits,
     check_order_allowed,
     compute_order_size_usd,
+    order_blockers,
 )
 
 log = structlog.get_logger()
@@ -48,6 +49,10 @@ class ShadowResult:
     allowed: bool
     why: str
     signed: bool
+    # Would this order have passed everything *except* being armed? The
+    # question that matters when deciding whether arming is worth it.
+    would_pass_if_armed: bool = False
+    other_blockers: str = ""
     maker: Optional[str] = None
     signer: Optional[str] = None
     error: Optional[str] = None
@@ -63,6 +68,8 @@ class ShadowResult:
             "allowed": self.allowed,
             "why": self.why,
             "signed": self.signed,
+            "would_pass_if_armed": self.would_pass_if_armed,
+            "other_blockers": self.other_blockers,
             "maker": self.maker,
             "signer": self.signer,
             "error": self.error,
@@ -145,24 +152,30 @@ def run_shadow_order(
     shares = max(MIN_ORDER_SHARES, math.floor(target_usd / price)) if price > 0 else MIN_ORDER_SHARES
     order_usd = round(shares * price, 4)
 
-    allowed, why = check_order_allowed(
-        order_usd,
+    # Nothing live has ever opened a position or lost money yet, so these
+    # are placeholders — see engine.py roadmap item 4 for where they stop
+    # being placeholders.
+    common = dict(
         kill_switch=kill_switch,
         limits=limits,
         on_chain_balance_usd=on_chain_balance_usd,
-        # Nothing live has ever opened a position or lost money yet, so
-        # there is nothing real to sum here — see engine.py roadmap item
-        # 4 for where this stops being a placeholder.
         open_exposure_usd=0.0,
         daily_realized_pnl_usd=0.0,
         orders_in_last_hour=0,
         seconds_remaining=seconds_remaining,
     )
+    allowed, why = check_order_allowed(order_usd, **common)
+
+    # Same order, evaluated as if arming were not in question. This is what
+    # tells you whether arming would actually have changed the outcome.
+    other = order_blockers(order_usd, include_arming=False, **common)
 
     result = ShadowResult(
         ts_ms=int(time.time() * 1000), side=side_label, price=price,
         shares=shares, order_usd=order_usd, reason=reason,
         allowed=allowed, why=why, signed=False,
+        would_pass_if_armed=not other,
+        other_blockers="; ".join(other),
     )
 
     try:

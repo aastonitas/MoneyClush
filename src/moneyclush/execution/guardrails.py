@@ -205,6 +205,78 @@ class KillSwitch:
         }
 
 
+def order_blockers(
+    order_usd: float,
+    *,
+    kill_switch: KillSwitch,
+    limits: SafetyLimits,
+    on_chain_balance_usd: float | None,
+    open_exposure_usd: float,
+    daily_realized_pnl_usd: float,
+    orders_in_last_hour: int,
+    seconds_remaining: float,
+    include_arming: bool = True,
+) -> list[str]:
+    """Every reason this order would be refused, not just the first.
+
+    Short-circuiting hid useful information: while unarmed, every signal
+    reported only "trading not armed", so there was no way to know
+    whether arming would have changed anything or whether the order was
+    doomed on size or timing anyway. That made arming a blind gamble on
+    the one decision where blind gambles are least appropriate.
+
+    `include_arming=False` answers the separate question "would this have
+    passed everything *except* being armed" — the one worth showing on a
+    dashboard that is not armed.
+    """
+    blockers: list[str] = []
+
+    if include_arming:
+        if kill_switch.is_killed():
+            blockers.append("kill switch engaged")
+        elif not kill_switch.is_armed():
+            blockers.append("trading not armed")
+
+    if on_chain_balance_usd is None:
+        # Every limit below is a fraction of the balance, so without it
+        # there is nothing meaningful left to check.
+        blockers.append("on-chain balance unavailable — refusing to trade blind")
+        return blockers
+
+    max_order_now = compute_order_size_usd(on_chain_balance_usd, limits)
+    if order_usd > max_order_now:
+        blockers.append(
+            f"order ${order_usd:.2f} exceeds {limits.order_fraction*100:.0f}% of "
+            f"balance (${max_order_now:.2f}, backstop ${limits.max_order_usd:.2f})"
+        )
+    if order_usd + limits.balance_buffer_usd > on_chain_balance_usd:
+        blockers.append(
+            f"order ${order_usd:.2f} + buffer exceeds on-chain balance "
+            f"${on_chain_balance_usd:.2f}"
+        )
+
+    max_exposure_now = compute_max_exposure_usd(on_chain_balance_usd, limits)
+    if open_exposure_usd + order_usd > max_exposure_now:
+        blockers.append(
+            f"open exposure ${open_exposure_usd:.2f} + order would exceed "
+            f"{limits.max_open_exposure_fraction*100:.0f}% of balance "
+            f"(${max_exposure_now:.2f})"
+        )
+    if daily_realized_pnl_usd <= -limits.max_daily_loss_usd:
+        blockers.append(
+            f"daily loss ${-daily_realized_pnl_usd:.2f} already at/past max "
+            f"${limits.max_daily_loss_usd:.2f}"
+        )
+    if orders_in_last_hour >= limits.max_orders_per_hour:
+        blockers.append(f"already {orders_in_last_hour} orders in the last hour")
+    if seconds_remaining < limits.min_seconds_remaining:
+        blockers.append(
+            f"only {seconds_remaining:.0f}s left, below min "
+            f"{limits.min_seconds_remaining:.0f}s"
+        )
+    return blockers
+
+
 def check_order_allowed(
     order_usd: float,
     *,
@@ -222,42 +294,15 @@ def check_order_allowed(
     approval, so a caller can log *why* an order went out, not just that
     it did.
     """
-    if kill_switch.is_killed():
-        return False, "kill switch engaged"
-    if not kill_switch.is_armed():
-        return False, "trading not armed"
-    if on_chain_balance_usd is None:
-        return False, "on-chain balance unavailable — refusing to trade blind"
-
-    max_order_now = compute_order_size_usd(on_chain_balance_usd, limits)
-    if order_usd > max_order_now:
-        return False, (
-            f"order ${order_usd:.2f} exceeds {limits.order_fraction*100:.0f}% of "
-            f"balance (${max_order_now:.2f}, backstop ${limits.max_order_usd:.2f})"
-        )
-    if order_usd + limits.balance_buffer_usd > on_chain_balance_usd:
-        return False, (
-            f"order ${order_usd:.2f} + buffer exceeds on-chain balance "
-            f"${on_chain_balance_usd:.2f}"
-        )
-
-    max_exposure_now = compute_max_exposure_usd(on_chain_balance_usd, limits)
-    if open_exposure_usd + order_usd > max_exposure_now:
-        return False, (
-            f"open exposure ${open_exposure_usd:.2f} + order would exceed "
-            f"{limits.max_open_exposure_fraction*100:.0f}% of balance "
-            f"(${max_exposure_now:.2f})"
-        )
-    if daily_realized_pnl_usd <= -limits.max_daily_loss_usd:
-        return False, (
-            f"daily loss ${-daily_realized_pnl_usd:.2f} already at/past max "
-            f"${limits.max_daily_loss_usd:.2f}"
-        )
-    if orders_in_last_hour >= limits.max_orders_per_hour:
-        return False, f"already {orders_in_last_hour} orders in the last hour"
-    if seconds_remaining < limits.min_seconds_remaining:
-        return False, (
-            f"only {seconds_remaining:.0f}s left, below min "
-            f"{limits.min_seconds_remaining:.0f}s"
-        )
+    blockers = order_blockers(
+        order_usd,
+        kill_switch=kill_switch, limits=limits,
+        on_chain_balance_usd=on_chain_balance_usd,
+        open_exposure_usd=open_exposure_usd,
+        daily_realized_pnl_usd=daily_realized_pnl_usd,
+        orders_in_last_hour=orders_in_last_hour,
+        seconds_remaining=seconds_remaining,
+    )
+    if blockers:
+        return False, "; ".join(blockers)
     return True, "all checks passed"

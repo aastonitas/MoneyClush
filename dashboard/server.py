@@ -126,7 +126,13 @@ STATE: dict = {
     # Real signed orders built from real signals — never submitted. See
     # execution/shadow.py.
     "shadow_orders": [],
-    "shadow_stats": {"seen": 0, "would_allow": 0, "sign_errors": 0},
+    "shadow_stats": {
+        "seen": 0, "would_allow": 0, "sign_errors": 0,
+        # Passed every limit except being armed — i.e. how often arming
+        # would actually have produced an order.
+        "would_pass_if_armed": 0,
+        "last_signal_ms": None,
+    },
     # Real submissions only ever land here the day a human creates
     # data/TRADING_ARMED — nothing in this codebase does that on its own.
     "live_orders": [],
@@ -853,8 +859,11 @@ async def poll_loop() -> None:
                                             seconds_remaining=mk.seconds_remaining,
                                         )
                                         STATE["shadow_stats"]["seen"] += 1
+                                        STATE["shadow_stats"]["last_signal_ms"] = shadow.ts_ms
                                         if shadow.allowed:
                                             STATE["shadow_stats"]["would_allow"] += 1
+                                        if shadow.would_pass_if_armed:
+                                            STATE["shadow_stats"]["would_pass_if_armed"] += 1
                                         if shadow.error:
                                             STATE["shadow_stats"]["sign_errors"] += 1
                                         STATE["shadow_orders"].insert(0, shadow.as_dict())

@@ -2661,14 +2661,26 @@ function renderShadowOrders(orders, stats, liveOrders) {
   stats = stats || { seen: 0, would_allow: 0, sign_errors: 0 };
   const submittedCount = liveOrders.filter(o => o.submitted).length;
 
+  // Time since the last signal: a quiet panel otherwise looks identical
+  // whether the bot is waiting or broken, and the gaps here run to
+  // several minutes.
+  let sinceTxt = "—", sinceCls = "dim";
+  if (stats.last_signal_ms) {
+    const secs = Math.max(0, Math.round((Date.now() - stats.last_signal_ms) / 1000));
+    const m = Math.floor(secs / 60), s = secs % 60;
+    sinceTxt = m ? `hace ${m}m ${String(s).padStart(2, "0")}s` : `hace ${s}s`;
+    sinceCls = secs > 300 ? "amber" : "up";
+  }
+
   $("shadow-status-badge").textContent =
-    `${stats.seen} vistas · ${stats.would_allow} pasarían · ${submittedCount} enviadas`;
+    `${stats.seen} vistas · ${stats.would_pass_if_armed || 0} listas · ${submittedCount} enviadas`;
 
   $("shadow-stats").innerHTML = `
+    <span>última señal <b class="${sinceCls}">${sinceTxt}</b></span>
     <span>señales vistas <b>${stats.seen}</b></span>
-    <span>habrían pasado los guardarraíles <b class="${stats.would_allow > 0 ? "up" : "dim"}">${stats.would_allow}</b></span>
-    <span>errores de firma <b class="${stats.sign_errors > 0 ? "down" : "dim"}">${stats.sign_errors}</b></span>
-    <span>órdenes reales enviadas <b class="${submittedCount > 0 ? "amber" : "dim"}">${submittedCount}</b></span>`;
+    <span>habrían pasado si estuviera armado <b class="${(stats.would_pass_if_armed||0) > 0 ? "up" : "dim"}">${stats.would_pass_if_armed || 0}</b></span>
+    <span>órdenes reales enviadas <b class="${submittedCount > 0 ? "amber" : "dim"}">${submittedCount}</b></span>
+    <span>errores de firma <b class="${stats.sign_errors > 0 ? "down" : "dim"}">${stats.sign_errors}</b></span>`;
 
   if (!orders.length) {
     $("shadow-body").innerHTML = '<tr><td colspan="8" class="dim">esperando la primera señal…</td></tr>';
@@ -2678,9 +2690,17 @@ function renderShadowOrders(orders, stats, liveOrders) {
   // shadow_orders and live_orders are appended together, once per signal,
   // in the same server tick — same index means same signal.
   $("shadow-body").innerHTML = orders.map((o, i) => {
-    const passCls = o.allowed ? "up" : "dim";
-    const passTxt = o.allowed ? "SÍ" : "NO";
-    const why = o.error ? `<span class="down">firma falló: ${o.error}</span>` : o.why;
+    // While unarmed, "allowed" would say NO for every row and hide
+    // whether anything else was wrong. What matters is whether arming
+    // would have changed the outcome.
+    const ready = o.would_pass_if_armed;
+    const passCls = ready ? "up" : "dim";
+    const passTxt = ready ? "SÍ" : "NO";
+    const why = o.error
+      ? `<span class="down">firma falló: ${o.error}</span>`
+      : (ready
+          ? (o.allowed ? o.why : "solo faltaba estar armado")
+          : (o.other_blockers || o.why));
     const live = liveOrders[i];
     const sentTxt = live && live.submitted
       ? `<span class="amber">SÍ · ${live.order_id || "?"}</span>`
