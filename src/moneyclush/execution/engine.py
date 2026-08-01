@@ -72,6 +72,17 @@ close before that can run live, in order:
    matches the documented V2 shape against exchange_v2 —  the same contract
    the wallet has already approved. So this step is a wiring job, not a
    crypto one.
+
+   Verified end to end the same day with a real signed order (`create_order`
+   only — `post_order` was never called, nothing left this machine): built
+   against a live BTC 5m UP token from a real active market, price 0.01 x
+   size 5. `maker` came back equal to POLYMARKET_FUNDER_ADDRESS, `signer`
+   equal to the wallet derived from PRIVATE_KEY, signatureType 1 as
+   configured, makerAmount/takerAmount math checked out (50000 / 5000000 at
+   6 decimals), and the signature is a well-formed 65-byte ECDSA blob (132
+   hex chars incl. 0x). `plan_orders`/`ExecutionEngine` still need to target
+   this client instead of `PolymarketClient.place_limit_order` — that
+   wiring, not the signing, is what remains of this item.
 2. A maker/ladder strategy. `TemporalArbitrageStrategy` only ever buys at
    the ask (crosses the spread). A two-sided engine needs its own class:
    place a resting bid on both legs, keep bid_up + bid_down under the same
