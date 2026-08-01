@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,9 +23,12 @@ import httpx
 import structlog
 import uvicorn
 from dataclasses import asdict
+from dotenv import load_dotenv
 from fastapi import Body, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 log = structlog.get_logger()
 
@@ -68,6 +72,20 @@ GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
 OKX_URL = "https://www.okx.com/api/v5/market/ticker"
 COINBASE_URL = "https://api.coinbase.com/v2/prices"
 
+# Polymarket's CLOB /balance-allowance endpoint reports 0 for both balance
+# and allowance on this account even though the wallet verifiably holds
+# pUSD and has max-uint256 allowance to the V2 exchange on-chain (see
+# execution/engine.py item 0) — so the real balance is read straight off
+# Polygon instead of trusting that endpoint.
+PUSD_CONTRACT = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
+PUSD_DECIMALS = 6
+POLYGON_RPCS = [
+    "https://polygon.drpc.org",
+    "https://1rpc.io/matic",
+    "https://polygon-bor-rpc.publicnode.com",
+]
+BALANCE_TTL = 30.0
+
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_DIR = ROOT / "data"
@@ -88,6 +106,10 @@ STATE: dict = {
     "paper_pnl": 0.0,
     "best_pair_seen": None,
     "strategy_gate": {},
+    # Real pUSD balance, read on-chain (see PUSD_CONTRACT above) — not the
+    # paper PnL. None until the first successful read.
+    "polymarket_balance": None,
+    "polymarket_balance_curve": [],
     # Second paper track. The arbitrage strategy correctly refuses to trade
     # a pair that costs more than $1, so its curve is flat by design. This
     # one backs the market's favourite on every BTC window instead: it
@@ -321,6 +343,35 @@ async def fetch_spot_prices(client: httpx.AsyncClient) -> tuple[dict[str, float]
     return out, sources
 
 
+async def fetch_pusd_balance(client: httpx.AsyncClient, address: str) -> float | None:
+    """Real pUSD balance for `address`, read straight off Polygon.
+
+    Tries each public RPC in turn — free endpoints rate-limit or blip
+    individually often enough that a single one is not reliable for a
+    number shown as truth on the dashboard.
+    """
+    data = "0x70a08231" + "000000000000000000000000" + address.removeprefix("0x").lower()
+    for rpc in POLYGON_RPCS:
+        try:
+            resp = await client.post(
+                rpc,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "eth_call",
+                    "params": [{"to": PUSD_CONTRACT, "data": data}, "latest"],
+                    "id": 1,
+                },
+                timeout=8.0,
+            )
+            result = resp.json()
+            if "result" not in result:
+                continue
+            return int(result["result"], 16) / 10**PUSD_DECIMALS
+        except Exception:
+            continue
+    return None
+
+
 def build_advisor(scanner_rows: list[dict], market_rows: list[dict]) -> list[dict]:
     """Rule-based contextual tips about the current market state."""
     tips: list[dict] = []
@@ -454,11 +505,22 @@ async def poll_loop() -> None:
         add_alert("info", "Sistema iniciado — modo PAPER, sin órdenes reales")
         await calibrate_from_candles(client)
         last_calibration = time.time()
+        last_balance_check = 0.0
         while True:
             try:
                 if time.time() - last_calibration > 900:
                     await calibrate_from_candles(client)
                     last_calibration = time.time()
+
+                funder = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "").strip()
+                if funder and time.time() - last_balance_check > BALANCE_TTL:
+                    last_balance_check = time.time()
+                    balance = await fetch_pusd_balance(client, funder)
+                    if balance is not None:
+                        STATE["polymarket_balance"] = round(balance, 6)
+                        curve = STATE["polymarket_balance_curve"]
+                        curve.append([int(time.time() * 1000), round(balance, 6)])
+                        STATE["polymarket_balance_curve"] = curve[-600:]
 
                 spots, spot_sources = await fetch_spot_prices(client)
                 STATE.update(spots)

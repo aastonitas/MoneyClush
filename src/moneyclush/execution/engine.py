@@ -3,7 +3,55 @@
 Converts trade signals into actual orders, managing fills, cancellations,
 and the reservation price adjustment based on current inventory.
 
-Status: planning only, nothing here submits a live order. `plan_orders` and
+Status: planning only, nothing here submits a live order.
+
+0. Polymarket CLOB V2 (cutover 2026-04-28). Verified on-chain and against
+   docs.polymarket.com/v2-migration on 2026-08-01. V1 is dead: legacy
+   V1-signed orders stopped being accepted at the cutover, with no backward
+   compatibility. What changed, and what it means here:
+
+   - Collateral is now pUSD (0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB),
+     an ERC-20 backed 1:1 by USDC, replacing USDC.e.
+   - Exchange contracts were rewritten: CTF Exchange V2
+     (0xE111180000d2663C0091e4f400237545B87B996B, deployed 2026-03-31) and
+     Neg Risk CTF Exchange V2 (0xe2222d279d744050d28e00520010520000310F59).
+   - Order signing changed: EIP-712 domain version "1" -> "2", a new
+     verifyingContract, and the order struct dropped nonce/feeRateBps/taker
+     while adding timestamp/metadata/builder. Fees are no longer embedded in
+     the signed order; they come from get_clob_market_info().
+
+   The `py-clob-client` package (V1, last release 0.34.6 on 2026-02-19 —
+   predating the V2 exchange deployment) cannot sign a valid V2 order. The
+   replacement package is `py-clob-client-v2` (module py_clob_client_v2),
+   and its config.py carries the correct pUSD and V2 exchange addresses.
+   Note the API differs: `create_or_derive_api_key()`, not
+   `create_or_derive_api_creds()`.
+
+   Caveat worth carrying forward: the CLOB `/balance-allowance` endpoint
+   currently reports balance 0 and all allowances 0 for our account, while
+   the same wallet verifiably holds pUSD and has max-uint256 allowances to
+   all three V2 contracts on-chain (checked against two independent Polygon
+   RPCs). Since its allowance report is contradicted by verifiable chain
+   state, that endpoint is not trustworthy as a pre-trade balance check
+   here. Use scripts/check_pusd_balance.py, which reads the pUSD ERC-20
+   balance straight from chain, and treat step 5's balance guardrail as
+   depending on the on-chain read, not the API.
+
+   That caveat has teeth, because the two failures compose into a silent
+   one. `OrderArgs.user_usdc_balance` is optional (default None) and, when
+   supplied, the v2 client shrinks a buy order to what the balance covers.
+   The limit-order path guards on `is not None`, so an explicit 0 is
+   honoured rather than ignored, and adjust_buy_amount_for_fees() then
+   returns 0 — `size = 0 / price` builds a **zero-size order**, no
+   exception raised. Feeding this field from the CLOB balance endpoint
+   would therefore null out every buy while looking like it worked.
+   Verified: adjust_buy_amount_for_fees(amount=10, price=0.5, balance=0)
+   -> 0.0, versus 10.0 at the real on-chain balance. Either leave the
+   field unset or populate it from the on-chain read. (The market-order
+   path guards on truthiness instead, so its 0 default is inert — the
+   inconsistency between the two is itself easy to trip over.)
+
+`plan_orders` and
 `simulate_fill` are paper-mode building blocks for a *taker* strategy
 (TemporalArbitrageStrategy buys at the current ask on whichever leg is
 cheap). A two-sided maker engine — resting a bid on Up and a bid on Down at
@@ -14,9 +62,16 @@ close before that can run live, in order:
 1. Real CLOB auth. `PolymarketClient._auth_headers` sends POLY_API_KEY/
    SECRET/PASSPHRASE headers, which is not how Polymarket's CLOB
    authenticates. Orders must be EIP-712-signed with the trading wallet's
-   private key, then exchanged for L2 API credentials (see py-clob-client).
-   `place_limit_order`'s POST to /order will 401 against the real API as
-   written today.
+   private key, then exchanged for L2 API credentials — via
+   py-clob-client-v2, per item 0. `place_limit_order`'s POST to /order will
+   401 against the real API as written today. Rather than reimplement V2
+   order signing here, route order placement through the v2 SDK's
+   ClobClient and keep this module's job as deciding *what* to place.
+   Reviewed 2026-08-01 and the SDK side is sound: the live CLOB reports
+   version 2, the client auto-resolves it, and the signed struct it builds
+   matches the documented V2 shape against exchange_v2 —  the same contract
+   the wallet has already approved. So this step is a wiring job, not a
+   crypto one.
 2. A maker/ladder strategy. `TemporalArbitrageStrategy` only ever buys at
    the ask (crosses the spread). A two-sided engine needs its own class:
    place a resting bid on both legs, keep bid_up + bid_down under the same
