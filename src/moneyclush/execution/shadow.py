@@ -19,7 +19,7 @@ from typing import Optional
 
 import structlog
 from py_clob_client_v2.client import ClobClient
-from py_clob_client_v2.clob_types import OrderArgs
+from py_clob_client_v2.clob_types import ApiCreds, OrderArgs
 from py_clob_client_v2.order_builder.constants import BUY
 
 from moneyclush.execution.guardrails import (
@@ -71,12 +71,44 @@ class ShadowResult:
 
 def build_shadow_client(
     *, private_key: str, funder: str, signature_type: int,
+    api_key: str = "", api_secret: str = "", api_passphrase: str = "",
     host: str = "https://clob.polymarket.com", chain_id: int = 137,
 ) -> ClobClient:
-    return ClobClient(
+    """Client used for both signing (shadow) and submitting (live).
+
+    The two need different auth levels, which is easy to get wrong in a
+    way that only shows up at the worst moment: signing an order needs
+    only the private key (L1), so shadow mode works fine without API
+    credentials — but submitting needs L2, and its absence surfaced as
+    "API Credentials are needed" on the very first armed signal rather
+    than at startup. Hence `assert_ready_to_submit` below: the gap is
+    now visible before arming, not after.
+    """
+    client = ClobClient(
         host=host, chain_id=chain_id, key=private_key,
         signature_type=signature_type, funder=funder,
     )
+    if api_key and api_secret and api_passphrase:
+        client.set_api_creds(
+            ApiCreds(
+                api_key=api_key,
+                api_secret=api_secret,
+                api_passphrase=api_passphrase,
+            )
+        )
+    return client
+
+
+def assert_ready_to_submit(client: ClobClient) -> tuple[bool, str]:
+    """Can this client actually submit an order, or only sign one?
+
+    Returns (ready, reason). Cheap and offline — checks the credentials
+    are present, not that the venue will accept them.
+    """
+    creds = getattr(client, "creds", None)
+    if not creds or not getattr(creds, "api_key", ""):
+        return False, "sin credenciales de API — el cliente puede firmar pero no enviar"
+    return True, "credenciales de API presentes"
 
 
 def run_shadow_order(

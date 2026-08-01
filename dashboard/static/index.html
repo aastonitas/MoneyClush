@@ -2733,11 +2733,12 @@ function renderGuardrails(gr) {
   $("gr-stop-btn").disabled = killed;
   $("gr-resume-btn").disabled = !killed;
 
+  const canSubmit = gr.can_submit !== false;
   const armBtn = $("gr-arm-btn");
   const countdown = $("gr-arm-countdown");
   armBtn.className = "gr-arm-btn" + (armed ? " armed" : "");
   armBtn.textContent = armed ? "■ DESARMAR" : "▶ ARMAR TRADING REAL";
-  armBtn.disabled = killed || (!armed && orderNow == null);
+  armBtn.disabled = killed || (!armed && (orderNow == null || !canSubmit));
 
   if (armed) {
     const left = gr.armed_seconds_left || 0;
@@ -2752,9 +2753,11 @@ function renderGuardrails(gr) {
     ? `<span class="down">Parada de emergencia activa.</span> No se puede armar mientras exista data/KILL_SWITCH — libérala primero.`
     : (armed
         ? `<span class="up">ARMADO — el bot puede enviar órdenes reales.</span> Cada orden todavía debe pasar todos los límites de arriba: ${live ? "" : "ahora mismo algo más lo impide."}`
-        : (orderNow == null
-            ? `Sin saldo on-chain legible — no se arma a ciegas, porque todos los límites son un % de ese número.`
-            : `Sin armar. Al armar, el bot podrá colocar órdenes reales de hasta $${fmt(orderNow, 2)} por su cuenta, sin preguntarte cada vez.`));
+        : (!canSubmit
+            ? `<span class="down">El cliente no puede enviar órdenes:</span> ${gr.can_submit_reason || "motivo desconocido"}. Firmar sí puede — por eso el modo sombra funciona igual.`
+            : (orderNow == null
+                ? `Sin saldo on-chain legible — no se arma a ciegas, porque todos los límites son un % de ese número.`
+                : `Sin armar. Al armar, el bot podrá colocar órdenes reales de hasta $${fmt(orderNow, 2)} por su cuenta, sin preguntarte cada vez.`)));
 }
 
 async function initGuardrails() {

@@ -73,7 +73,11 @@ from moneyclush.execution.guardrails import (
     compute_max_exposure_usd,
     compute_order_size_usd,
 )
-from moneyclush.execution.shadow import build_shadow_client, run_shadow_order
+from moneyclush.execution.shadow import (
+    assert_ready_to_submit,
+    build_shadow_client,
+    run_shadow_order,
+)
 from moneyclush.execution.live_order import submit_order_if_allowed
 
 CLOB_URL = "https://clob.polymarket.com"
@@ -165,19 +169,34 @@ strategy = TemporalArbitrageStrategy(block_size=25)
 kill_switch = KillSwitch()
 safety_limits = SafetyLimits()
 
-# Shadow client: builds and signs a real order for every real signal, but
-# nothing here ever calls post_order (see execution/shadow.py). None if
-# the wallet isn't configured — shadow mode is then silently a no-op
-# rather than a crash, since most of this dashboard works fine without it.
+# Shadow client: signs a real order for every real signal. Submitting is
+# gated separately (execution/live_order.py). None if the wallet isn't
+# configured — shadow mode is then silently a no-op rather than a crash,
+# since most of this dashboard works fine without it.
+#
+# `can_submit` is tracked apart from the client existing because signing
+# and submitting need different auth levels: a client with only the
+# private key signs happily and then fails at post_order. Surfacing it
+# here means the dashboard can say so before arming rather than after.
 shadow_client = None
+can_submit = False
+can_submit_reason = "wallet no configurada"
 if os.environ.get("PRIVATE_KEY") and os.environ.get("POLYMARKET_FUNDER_ADDRESS"):
     try:
         shadow_client = build_shadow_client(
             private_key=os.environ["PRIVATE_KEY"],
             funder=os.environ["POLYMARKET_FUNDER_ADDRESS"],
             signature_type=int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "1")),
+            api_key=os.environ.get("POLYMARKET_API_KEY", ""),
+            api_secret=os.environ.get("POLYMARKET_API_SECRET", ""),
+            api_passphrase=os.environ.get("POLYMARKET_API_PASSPHRASE", ""),
         )
-        log.info("shadow.client_ready")
+        can_submit, can_submit_reason = assert_ready_to_submit(shadow_client)
+        log.info(
+            "shadow.client_ready",
+            can_submit=can_submit,
+            detail=can_submit_reason,
+        )
     except Exception as exc:
         log.warning("shadow.client_failed", error=str(exc)[:160])
 
@@ -1285,6 +1304,8 @@ def guardrails_payload() -> dict:
     balance = STATE.get("polymarket_balance")
     return {
         **kill_switch.status(),
+        "can_submit": can_submit,
+        "can_submit_reason": can_submit_reason,
         "limits": asdict(safety_limits),
         "order_size_usd_now": (
             compute_order_size_usd(balance, safety_limits) if balance is not None else None
@@ -1321,6 +1342,14 @@ async def arm_trading(payload: dict = Body(default={})) -> JSONResponse:
         return JSONResponse(
             {**guardrails_payload(),
              "error": "sin saldo on-chain legible — no se arma a ciegas"},
+            status_code=409,
+        )
+    # Refusing here turns a failure that used to surface as a dead order
+    # on the first armed signal into one visible before arming at all.
+    if not can_submit:
+        return JSONResponse(
+            {**guardrails_payload(),
+             "error": f"el cliente no puede enviar órdenes: {can_submit_reason}"},
             status_code=409,
         )
 
